@@ -4,7 +4,15 @@ import path from "path";
 import axios from "axios";
 import dayjs from "dayjs";
 import type { Context } from "grammy";
-import { Bot, Api, GrammyError, HttpError, RawApi, InputFile, InlineKeyboard } from "grammy";
+import {
+  Bot,
+  Api,
+  GrammyError,
+  HttpError,
+  RawApi,
+  InputFile,
+  InlineKeyboard,
+} from "grammy";
 import { keycrmApiClient } from "../api/keycrmApiClient.js";
 import { Order } from "../types/keycrm.js";
 import { fileHelper } from "../helpers/fileHelper.js";
@@ -13,7 +21,14 @@ import { changeOrderStatus, addTagToOrder } from "./keycrm.services.js";
 import { fetchAllOrders } from "../helpers/keycrmHelper.js";
 import { messageHelper } from "../helpers/messageHelper.js";
 import { StudioStatus } from "./workload.service.js";
-import { getFaynatownConfigError, parseFaynatownBranch, getLatestPassesWithQr, createVisitorPasses, getLatestCarPasses, createCarPass } from "./faynatown.service.js";
+import {
+  getFaynatownConfigError,
+  parseFaynatownBranch,
+  getLatestPassesWithQr,
+  createVisitorPasses,
+  getLatestCarPasses,
+  createCarPass,
+} from "./faynatown.service.js";
 
 import timezone from "dayjs/plugin/timezone.js";
 import utc from "dayjs/plugin/utc.js";
@@ -27,8 +42,7 @@ const managerChanelChatId = process?.env?.MANAGER_CHANNELS_CHAT_ID || "";
 const couriers = process?.env?.COURIERS || "";
 const botToken = process?.env.TELEGRAM_BOT_TOKEN || "";
 const forwardChatId = process?.env?.VIDEO_CHAT_ID || "";
-const isHoliday =
-  (process?.env?.IS_HOLIDAY || "").toLowerCase() === "true";
+const isHoliday = (process?.env?.IS_HOLIDAY || "").toLowerCase() === "true";
 const productDeliveredStatus = process?.env?.PRODUCT_DELIVERED_STATUS || "23";
 const zReportChatId = process?.env?.Z_REPORT_CHAT_ID || "";
 const xReportChatId = process?.env?.X_REPORT_CHAT_ID || "";
@@ -106,24 +120,103 @@ const REPORT_SALONS: [string, string][] = [
 ];
 
 const X_REPORT_STEPS: ReportStepConfig[] = [
-  { id: "x_date", question: "📆 Дата (наприклад 03.03.2026)", input: "text", dataKey: "date" },
-  { id: "x_admin", question: "👤 Адміністратор (ваш нік або ПІБ)", input: "text", dataKey: "administrator" },
-  { id: "x_salon", question: "🏪 Салон", input: "choice", choices: REPORT_SALONS, dataKey: "salon" },
-  { id: "x_cash", question: "💵 Готівка в касі", input: "text", dataKey: "cash" },
-  { id: "x_photo", question: "📷 Надішліть фото звіту (одне або альбом)", input: "photo" },
+  {
+    id: "x_date",
+    question: "📆 Дата (наприклад 03.03.2026)",
+    input: "text",
+    dataKey: "date",
+  },
+  {
+    id: "x_admin",
+    question: "👤 Адміністратор (ваш нік або ПІБ)",
+    input: "text",
+    dataKey: "administrator",
+  },
+  {
+    id: "x_salon",
+    question: "🏪 Салон",
+    input: "choice",
+    choices: REPORT_SALONS,
+    dataKey: "salon",
+  },
+  {
+    id: "x_cash",
+    question: "💵 Готівка в касі",
+    input: "text",
+    dataKey: "cash",
+  },
+  {
+    id: "x_photo",
+    question: "📷 Надішліть фото звіту (одне або альбом)",
+    input: "photo",
+  },
 ];
 
 const Z_REPORT_STEPS: ReportStepConfig[] = [
-  { id: "z_date", question: "📆 Дата (наприклад 03.03.2026)", input: "text", dataKey: "date" },
-  { id: "z_salon", question: "🏪 Салон", input: "choice", choices: REPORT_SALONS, dataKey: "salon" },
-  { id: "z_cash_day", question: "🖥 Каса за день", input: "text", dataKey: "cash_day" },
-  { id: "z_delivery", question: "🚙 Доставка", input: "text", dataKey: "delivery" },
-  { id: "z_pass_through", question: "🚶🏻‍♂️‍➡️ Прохідні", input: "text", dataKey: "pass_through" },
-  { id: "z_write_off", question: "✅ Списання внесено", input: "choice", choices: [["Так", "Так"], ["Ні", "Ні"]], dataKey: "write_off_done" },
-  { id: "z_cash", question: "💵 Готівка в касі", input: "text", dataKey: "cash" },
-  { id: "z_comment", question: "💬 Коментар (або напишіть —)", input: "text", dataKey: "comment" },
-  { id: "z_admin", question: "👤 Адміністратор (ваш нік або ПІБ)", input: "text", dataKey: "administrator" },
-  { id: "z_photo", question: "📷 Надішліть фото звіту (одне або альбом)", input: "photo" },
+  {
+    id: "z_date",
+    question: "📆 Дата (наприклад 03.03.2026)",
+    input: "text",
+    dataKey: "date",
+  },
+  {
+    id: "z_salon",
+    question: "🏪 Салон",
+    input: "choice",
+    choices: REPORT_SALONS,
+    dataKey: "salon",
+  },
+  {
+    id: "z_cash_day",
+    question: "🖥 Каса за день",
+    input: "text",
+    dataKey: "cash_day",
+  },
+  {
+    id: "z_delivery",
+    question: "🚙 Доставка",
+    input: "text",
+    dataKey: "delivery",
+  },
+  {
+    id: "z_pass_through",
+    question: "🚶🏻‍♂️‍➡️ Прохідні",
+    input: "text",
+    dataKey: "pass_through",
+  },
+  {
+    id: "z_write_off",
+    question: "✅ Списання внесено",
+    input: "choice",
+    choices: [
+      ["Так", "Так"],
+      ["Ні", "Ні"],
+    ],
+    dataKey: "write_off_done",
+  },
+  {
+    id: "z_cash",
+    question: "💵 Готівка в касі",
+    input: "text",
+    dataKey: "cash",
+  },
+  {
+    id: "z_comment",
+    question: "💬 Коментар (або напишіть —)",
+    input: "text",
+    dataKey: "comment",
+  },
+  {
+    id: "z_admin",
+    question: "👤 Адміністратор (ваш нік або ПІБ)",
+    input: "text",
+    dataKey: "administrator",
+  },
+  {
+    id: "z_photo",
+    question: "📷 Надішліть фото звіту (одне або альбом)",
+    input: "photo",
+  },
 ];
 
 function getReportSteps(type: ReportType): ReportStepConfig[] {
@@ -157,9 +250,10 @@ function buildReportSummaryText(session: ReportSession): string {
 
 async function sendReportToChannel(
   bot: Bot<Context, Api<RawApi>>,
-  session: ReportSession
+  session: ReportSession,
 ): Promise<void> {
-  const targetChatId = session.reportType === "z" ? zReportChatId : xReportChatId;
+  const targetChatId =
+    session.reportType === "z" ? zReportChatId : xReportChatId;
   const caption =
     `Звіт від @${session.username}\n\n` + buildReportSummaryText(session);
 
@@ -176,13 +270,14 @@ async function sendReportToChannel(
     media: fileId,
     caption: i === 0 ? caption : undefined,
   }));
+
   await bot.api.sendMediaGroup(targetChatId, media);
 }
 
 async function sendNextReportStep(
   ctx: Context,
   bot: Bot<Context, Api<RawApi>>,
-  session: ReportSession
+  session: ReportSession,
 ): Promise<void> {
   const steps = getReportSteps(session.reportType);
   const step = steps[session.stepIndex];
@@ -193,7 +288,9 @@ async function sendNextReportStep(
   if (step.input === "choice" && step.choices?.length) {
     const keyboard = new InlineKeyboard();
     step.choices.forEach(([label], idx) => {
-      keyboard.text(label, `report:ch:${session.reportType}:${step.id}:${idx}`).row();
+      keyboard
+        .text(label, `report:ch:${session.reportType}:${step.id}:${idx}`)
+        .row();
     });
     const msg = await ctx.reply(step.question, { reply_markup: keyboard });
     if (msg?.message_id) session.botMessageIdsToDelete.push(msg.message_id);
@@ -203,7 +300,7 @@ async function sendNextReportStep(
     const keyboard = new InlineKeyboard().text("Далі", "report:step:next");
     const msg = await ctx.reply(
       `У вас є ${session.photoFileIds.length} фото. Надішліть ще або натисніть Далі.`,
-      { reply_markup: keyboard }
+      { reply_markup: keyboard },
     );
     if (msg?.message_id) session.botMessageIdsToDelete.push(msg.message_id);
     return;
@@ -215,9 +312,11 @@ async function sendNextReportStep(
 async function sendReportConfirmStep(
   ctx: Context,
   bot: Bot<Context, Api<RawApi>>,
-  session: ReportSession
+  session: ReportSession,
 ): Promise<void> {
-  const text = buildReportSummaryText(session) + `\n\n📷 Фото: ${session.photoFileIds.length} шт.`;
+  const text =
+    buildReportSummaryText(session) +
+    `\n\n📷 Фото: ${session.photoFileIds.length} шт.`;
   const keyboard = new InlineKeyboard()
     .text("Відправити звіт", "report:confirm:yes")
     .text("Скасувати", "report:confirm:no");
@@ -230,7 +329,7 @@ async function startReportSession(
   bot: Bot<Context, Api<RawApi>>,
   reportType: ReportType,
   initialPhotoFileIds: string[] = [],
-  initialMessageIds: number[] = []
+  initialMessageIds: number[] = [],
 ): Promise<void> {
   if (!ctx.from?.username || !ctx.chat?.id) return;
   const chatId = String(ctx.chat.id);
@@ -262,7 +361,7 @@ export const isCourier = (username: string) => {
 export const sendTelegramMessage = async (
   chatId: string,
   text: string,
-  parseMode?: "Markdown" | "HTML" | "MarkdownV2"
+  parseMode?: "Markdown" | "HTML" | "MarkdownV2",
 ) => {
   try {
     const response = await axios.post(
@@ -271,7 +370,7 @@ export const sendTelegramMessage = async (
         chat_id: chatId,
         text: text || "empty",
         ...(parseMode ? { parse_mode: parseMode } : {}),
-      }
+      },
     );
 
     return response.data;
@@ -302,7 +401,7 @@ export const sendTelegramMessageToMainAccount = async (text: string) => {
 };
 
 export const sendTelegramMessageToNotificationsChanel = async (
-  text: string
+  text: string,
 ) => {
   try {
     const res = await sendTelegramMessage(managerChanelChatId, text);
@@ -315,13 +414,13 @@ export const sendTelegramMessageToNotificationsChanel = async (
 
 export const handleVideoMessage = async (
   ctx: Context,
-  bot: Bot<Context, Api<RawApi>>
+  bot: Bot<Context, Api<RawApi>>,
 ) => {
   const caption = ctx?.message?.caption || "";
 
   if (!ctx?.from?.username) {
     ctx.reply(
-      "Наш бот не бачить твій nickname (ім'я користувача після @). Зміни будь ласка налаштування безпеки та спробуй наново (наново введи команду /start)."
+      "Наш бот не бачить твій nickname (ім'я користувача після @). Зміни будь ласка налаштування безпеки та спробуй наново (наново введи команду /start).",
     );
 
     return;
@@ -332,12 +431,12 @@ export const handleVideoMessage = async (
       const orderId = caption.trim().split(" ")[1].trim();
 
       const res = await keycrmApiClient.get<Order>(
-        `order/${+orderId}?include=manager,assigned`
+        `order/${+orderId}?include=manager,assigned`,
       );
 
       if (!res.data) {
         ctx.reply(
-          "Такого замовлення не існує, перевірте будь ласка номер замовлення та спробуйте ще раз."
+          "Такого замовлення не існує, перевірте будь ласка номер замовлення та спробуйте ще раз.",
         );
 
         return;
@@ -359,26 +458,12 @@ export const handleVideoMessage = async (
         return;
       }
 
-      // Видалити на свята
-      // if (
-      //   !order?.assigned?.find(
-      //     (ass) =>
-      //       ass.username.toLowerCase() === ctx.from?.username?.toLowerCase()
-      //   )
-      // ) {
-      //   ctx.reply(
-      //     "Це замовлення призначене не на вас. Будь ласка, попросіть менеджерів переназначити його на вас у СРМ системі."
-      //   );
-
-      //   return;
-      // }
-
       const promises = [
         forwardReport(
           bot,
           forwardChatId,
           ctx?.chat?.id || "",
-          ctx?.message?.message_id || 0
+          ctx?.message?.message_id || 0,
         ),
         await changeOrderStatus(orderId, productDeliveredStatus),
       ];
@@ -391,7 +476,7 @@ export const handleVideoMessage = async (
 
       const userEntry = Object.entries(users).find(
         ([, user]) =>
-          (user as TelegramUserDatabase)?.username === managerUsername
+          (user as TelegramUserDatabase)?.username === managerUsername,
       )?.[0];
 
       let messageForManager = "";
@@ -428,7 +513,7 @@ export const handleVideoMessage = async (
     } catch (error: any) {
       if (error?.status && error?.status === 404) {
         ctx.reply(
-          "Такого замовлення не існує, перевірте будь ласка номер замовлення та спробуйте ще раз."
+          "Такого замовлення не існує, перевірте будь ласка номер замовлення та спробуйте ще раз.",
         );
 
         return;
@@ -436,13 +521,13 @@ export const handleVideoMessage = async (
       console.log(error);
 
       ctx.reply(
-        "Сталася якась помилка при пересилці відео у групу. Спробуйте це зробити власноруч."
+        "Сталася якась помилка при пересилці відео у групу. Спробуйте це зробити власноруч.",
       );
     }
   } else {
     ctx.reply(
       "Суворий формат тексту: `Доставка 0000` , де 0000 це номер замовлення",
-      { parse_mode: "Markdown" }
+      { parse_mode: "Markdown" },
     );
   }
 };
@@ -451,7 +536,7 @@ export const forwardReport = async (
   bot: Bot,
   chatToForward: string,
   fromChatId: string | number,
-  messageId: number
+  messageId: number,
 ) => {
   try {
     bot.api.forwardMessage(chatToForward, fromChatId, messageId || 0);
@@ -467,12 +552,12 @@ const albumBuffer = new Map<
 
 export const handlePhotoMessage = async (
   ctx: Context,
-  bot: Bot<Context, Api<RawApi>>
+  bot: Bot<Context, Api<RawApi>>,
 ) => {
   try {
     if (!ctx?.from?.username) {
       ctx.reply(
-        "Наш бот не бачить твій nickname (ім'я користувача після @). Зміни будь ласка налаштування безпеки та спробуй наново (наново введи команду /start)."
+        "Наш бот не бачить твій nickname (ім'я користувача після @). Зміни будь ласка налаштування безпеки та спробуй наново (наново введи команду /start).",
       );
       return;
     }
@@ -554,7 +639,7 @@ export const handlePhotoMessage = async (
     }
   } catch (error: any) {
     ctx.reply(
-      "Сталася якась помилка. Напишіть керуючому." + JSON.stringify(error)
+      "Сталася якась помилка. Напишіть керуючому." + JSON.stringify(error),
     );
   }
 };
@@ -562,14 +647,14 @@ export const handlePhotoMessage = async (
 async function processAlbumMessages(
   ctx: Context,
   messages: Context["message"][],
-  _bot: Bot<Context>
+  _bot: Bot<Context>,
 ) {
   const firstMessage = messages[0];
   const caption = firstMessage?.caption || "";
 
   if (!firstMessage?.from?.username) {
     await ctx.reply(
-      "Наш бот не бачить твій nickname (ім'я користувача після @). Змініть налаштування безпеки та спробуйте ще раз (/start)."
+      "Наш бот не бачить твій nickname (ім'я користувача після @). Змініть налаштування безпеки та спробуйте ще раз (/start).",
     );
     return;
   }
@@ -614,7 +699,7 @@ async function processAlbumMessages(
     }
   } catch (error: any) {
     await ctx.reply(
-      "Сталася якась помилка. Напишіть керуючому. " + JSON.stringify(error)
+      "Сталася якась помилка. Напишіть керуючому. " + JSON.stringify(error),
     );
   }
 }
@@ -624,7 +709,7 @@ async function processSinglePhoto(ctx: Context, bot: Bot<Context>) {
 
   if (!ctx.from?.username) {
     await ctx.reply(
-      "Наш бот не бачить твій nickname (ім'я користувача після @). Змініть налаштування безпеки та спробуйте ще раз (/start)."
+      "Наш бот не бачить твій nickname (ім'я користувача після @). Змініть налаштування безпеки та спробуйте ще раз (/start).",
     );
     return;
   }
@@ -654,7 +739,7 @@ async function processSinglePhoto(ctx: Context, bot: Bot<Context>) {
     }
   } catch (error: any) {
     await ctx.reply(
-      "Сталася якась помилка. Напишіть керуючому. " + JSON.stringify(error)
+      "Сталася якась помилка. Напишіть керуючому. " + JSON.stringify(error),
     );
   }
 }
@@ -839,7 +924,9 @@ export const initializeBot = () => {
     const keyboard = new InlineKeyboard()
       .text("X-звіт", "report:start:x")
       .text("Z-звіт", "report:start:z");
-    const sent = await ctx.reply("Оберіть тип звіту:", { reply_markup: keyboard });
+    const sent = await ctx.reply("Оберіть тип звіту:", {
+      reply_markup: keyboard,
+    });
     if (chatId != null && sent?.message_id) {
       pendingReportStartBotMessageIds.set(chatId, sent.message_id);
     }
@@ -888,7 +975,9 @@ export const initializeBot = () => {
   });
 
   /** Парсинг філії та кількості (1-5) з тексту про проходки */
-  const parsePassArgs = (text: string): { complexId?: number; count: number } => {
+  const parsePassArgs = (
+    text: string,
+  ): { complexId?: number; count: number } => {
     const parts = text.trim().toLowerCase().split(/\s+/).filter(Boolean);
     let complexId: number | undefined;
     let count = 1;
@@ -917,8 +1006,13 @@ export const initializeBot = () => {
   };
 
   /** Підпис під QR у вигляді як у додатку: ЖК, період дії перепустки, дати */
-  const formatPassCaption = (pass: { complexName: string; visitorName?: string; startTime: string; endTime: string }) => {
-  const name = `ЖК ${pass.complexName}`;
+  const formatPassCaption = (pass: {
+    complexName: string;
+    visitorName?: string;
+    startTime: string;
+    endTime: string;
+  }) => {
+    const name = `ЖК ${pass.complexName}`;
     const from = formatPassDate(pass.startTime);
     const to = formatPassDate(pass.endTime);
     return `${name}\n${pass.visitorName ?? ""}\n\nПеріод дії перепустки\n${from}\n${to}`;
@@ -927,7 +1021,10 @@ export const initializeBot = () => {
   /** Отримати авто-перепустки (до 30): перепустки авто, перепустки авто файна 10 */
   bot.hears(/перепустки\s+авто/i, async (ctx) => {
     const text = ctx.message?.text?.trim() ?? "";
-    console.log("[Faynatown hears GET] перепустки авто, text:", JSON.stringify(text));
+    console.log(
+      "[Faynatown hears GET] перепустки авто, text:",
+      JSON.stringify(text),
+    );
     try {
       const configError = getFaynatownConfigError();
       if (configError) {
@@ -935,19 +1032,23 @@ export const initializeBot = () => {
         return;
       }
       const numbers = text.match(/\d+/g);
-      const count =
-        numbers?.length
-          ? Math.min(30, Math.max(1, Math.max(...numbers.map((n) => parseInt(n, 10)))))
-          : 10;
+      const count = numbers?.length
+        ? Math.min(
+            30,
+            Math.max(1, Math.max(...numbers.map((n) => parseInt(n, 10)))),
+          )
+        : 10;
       const { complexId } = parsePassArgs(text);
       const list = await getLatestCarPasses(complexId, count);
       if (list.length === 0) {
-        await ctx.reply("Авто-перепусток не знайдено для обраного комплексу. Спробуйте вказати файна або республіка.");
+        await ctx.reply(
+          "Авто-перепусток не знайдено для обраного комплексу. Спробуйте вказати файна або республіка.",
+        );
         return;
       }
       const lines = list.map(
         (p) =>
-          `${p.plateNumber ?? p.hikvisionPassId ?? "—"} — ЖК ${p.complexName} — ${formatPassDate(p.startTime)} … ${formatPassDate(p.endTime)}`
+          `${p.plateNumber ?? p.hikvisionPassId ?? "—"} — ЖК ${p.complexName} — ${formatPassDate(p.startTime)} … ${formatPassDate(p.endTime)}`,
       );
       await ctx.reply(lines.join("\n"));
     } catch (error: unknown) {
@@ -960,7 +1061,10 @@ export const initializeBot = () => {
   /** Отримати перепустки (до 5): перепустки, перепустки файна, перепустки файна 3 */
   bot.hears(/перепустки/i, async (ctx) => {
     const text = ctx.message?.text?.trim() ?? "";
-    console.log("[Faynatown hears GET] перепустки, text:", JSON.stringify(text));
+    console.log(
+      "[Faynatown hears GET] перепустки, text:",
+      JSON.stringify(text),
+    );
     try {
       const configError = getFaynatownConfigError();
       if (configError) {
@@ -971,15 +1075,22 @@ export const initializeBot = () => {
       const numbers = text.match(/\d+/g);
       if (numbers?.some((n) => parseInt(n, 10) > 5)) {
         console.log("[Faynatown hears GET] число > 5");
-        await ctx.reply("Можна отримати максимум 5 останніх перепусток. Вкажіть число від 1 до 5.");
+        await ctx.reply(
+          "Можна отримати максимум 5 останніх перепусток. Вкажіть число від 1 до 5.",
+        );
         return;
       }
       const { complexId, count } = parsePassArgs(text);
       console.log("[Faynatown hears GET] parsePassArgs:", { complexId, count });
       const results = await getLatestPassesWithQr(complexId, count);
-      console.log("[Faynatown hears GET] getLatestPassesWithQr результатів:", results.length);
+      console.log(
+        "[Faynatown hears GET] getLatestPassesWithQr результатів:",
+        results.length,
+      );
       if (results.length === 0) {
-        await ctx.reply("Перепусток не знайдено для обраного комплексу. Спробуйте вказати файна або республіка.");
+        await ctx.reply(
+          "Перепусток не знайдено для обраного комплексу. Спробуйте вказати файна або республіка.",
+        );
         return;
       }
       for (let i = 0; i < results.length; i++) {
@@ -1000,7 +1111,10 @@ export const initializeBot = () => {
   /** Створити авто-перепустку. Філія та номер авто обовʼязкові: нова перепустка авто республіка KA7877AM */
   bot.hears(/нова\s+перепустка\s+авто/i, async (ctx) => {
     const text = ctx.message?.text?.trim() ?? "";
-    console.log("[Faynatown hears CREATE] нова перепустка авто, text:", JSON.stringify(text));
+    console.log(
+      "[Faynatown hears CREATE] нова перепустка авто, text:",
+      JSON.stringify(text),
+    );
     try {
       const configError = getFaynatownConfigError();
       if (configError) {
@@ -1011,24 +1125,40 @@ export const initializeBot = () => {
       const tokens = afterAuto.split(/\s+/).filter(Boolean);
       const plate = tokens[tokens.length - 1];
       if (!plate || !/^[A-Za-z0-9]{5,12}$/i.test(plate)) {
-        await ctx.reply("Вкажіть номер авто (латиницею, наприклад KA7877AM). Приклад: нова перепустка авто республіка KA7877AM");
+        await ctx.reply(
+          "Вкажіть номер авто (латиницею, наприклад KA7877AM). Приклад: нова перепустка авто республіка KA7877AM",
+        );
         return;
       }
       const argsWithoutPlate = tokens.slice(0, -1).join(" ");
       const { complexId } = parsePassArgs(argsWithoutPlate);
       if (complexId === undefined) {
-        await ctx.reply("Обовʼязково вкажіть філію: файна або республіка. Наприклад: нова перепустка авто республіка KA7877AM");
+        await ctx.reply(
+          "Обовʼязково вкажіть філію: файна або республіка. Наприклад: нова перепустка авто республіка KA7877AM",
+        );
         return;
       }
       const ok = await createCarPass(complexId, plate);
-      const branchName = complexId === 1 ? "Файна Таун" : complexId === 2 ? "Республіка" : `комплекс ${complexId}`;
+      const branchName =
+        complexId === 1
+          ? "Файна Таун"
+          : complexId === 2
+            ? "Республіка"
+            : `комплекс ${complexId}`;
       if (ok) {
-        await ctx.reply(`Створено авто-перепустку для ${plate.toUpperCase()}, ЖК ${branchName}. Період 24 год.`);
+        await ctx.reply(
+          `Створено авто-перепустку для ${plate.toUpperCase()}, ЖК ${branchName}. Період 24 год.`,
+        );
       } else {
-        await ctx.reply(`API повернув помилку при створенні авто-перепустки для ${plate}. Спробуйте пізніше.`);
+        await ctx.reply(
+          `API повернув помилку при створенні авто-перепустки для ${plate}. Спробуйте пізніше.`,
+        );
       }
     } catch (error: unknown) {
-      console.error("[Faynatown hears CREATE] нова перепустка авто помилка:", error);
+      console.error(
+        "[Faynatown hears CREATE] нова перепустка авто помилка:",
+        error,
+      );
       const msg = error instanceof Error ? error.message : String(error);
       await ctx.reply(`Помилка створення авто-перепустки: ${msg}`);
     }
@@ -1037,7 +1167,10 @@ export const initializeBot = () => {
   /** Створити перепустки (1-5). Філія обовʼязкова: нова перепустка файна, нова перепустка республіка 3 */
   bot.hears(/нова\s+перепустка/i, async (ctx) => {
     const text = ctx.message?.text?.trim() ?? "";
-    console.log("[Faynatown hears CREATE] нова перепустка, text:", JSON.stringify(text));
+    console.log(
+      "[Faynatown hears CREATE] нова перепустка, text:",
+      JSON.stringify(text),
+    );
     try {
       const configError = getFaynatownConfigError();
       if (configError) {
@@ -1048,18 +1181,30 @@ export const initializeBot = () => {
       const numbers = text.match(/\d+/g);
       if (numbers?.some((n) => parseInt(n, 10) > 5)) {
         console.log("[Faynatown hears CREATE] число > 5");
-        await ctx.reply("Максимум можна створити 5 перепусток за раз. Вкажіть число від 1 до 5.");
+        await ctx.reply(
+          "Максимум можна створити 5 перепусток за раз. Вкажіть число від 1 до 5.",
+        );
         return;
       }
       const { complexId, count } = parsePassArgs(text);
       if (complexId === undefined) {
-        await ctx.reply("Обовʼязково вкажіть філію: файна або республіка. Наприклад: нова перепустка файна");
+        await ctx.reply(
+          "Обовʼязково вкажіть філію: файна або республіка. Наприклад: нова перепустка файна",
+        );
         return;
       }
       const branchId = complexId;
-      console.log("[Faynatown hears CREATE] parsePassArgs:", { complexId, count }, "branchId:", branchId);
+      console.log(
+        "[Faynatown hears CREATE] parsePassArgs:",
+        { complexId, count },
+        "branchId:",
+        branchId,
+      );
       await createVisitorPasses(branchId, count);
-      console.log("[Faynatown hears CREATE] createVisitorPasses виконано, count:", count);
+      console.log(
+        "[Faynatown hears CREATE] createVisitorPasses виконано, count:",
+        count,
+      );
       await delay(PASS_DELAY_MS);
       const results = await getLatestPassesWithQr(branchId, count);
       if (results.length > 0) {
@@ -1071,7 +1216,12 @@ export const initializeBot = () => {
           });
         }
       }
-      const branchName = branchId === 1 ? "Файна Таун" : branchId === 2 ? "Республіка" : `комплекс ${branchId}`;
+      const branchName =
+        branchId === 1
+          ? "Файна Таун"
+          : branchId === 2
+            ? "Республіка"
+            : `комплекс ${branchId}`;
       await ctx.reply(`Створено ${count} перепусток для ${branchName}.`);
     } catch (error: unknown) {
       console.error("[Faynatown hears CREATE] помилка:", error);
@@ -1083,7 +1233,7 @@ export const initializeBot = () => {
   bot.command("my_orders", async (ctx) => {
     if (!ctx.from?.username) {
       ctx.reply(
-        "Наш бот не бачить твій nickname (ім'я користувача після @). Зміни будь ласка налаштування безпеки та спробуй наново (наново введи команду /start)."
+        "Наш бот не бачить твій nickname (ім'я користувача після @). Зміни будь ласка налаштування безпеки та спробуй наново (наново введи команду /start).",
       );
 
       return;
@@ -1137,14 +1287,14 @@ export const initializeBot = () => {
 
       if (!orderId) {
         return ctx.reply(
-          "Будь ласка, введіть коректний номер замовлення. Приклад: 'Друк 1234'"
+          "Будь ласка, введіть коректний номер замовлення. Приклад: 'Друк 1234'",
         );
       }
 
       const printUrl = `http://194.113.32.44/print/${orderId}`;
 
       await ctx.reply(
-        `🖨 Для друку замовлення натисніть на посилання:\n${printUrl}`
+        `🖨 Для друку замовлення натисніть на посилання:\n${printUrl}`,
       );
     } catch (error) {
       console.error("Помилка при обробці запиту на друк:", error);
@@ -1162,7 +1312,7 @@ export const initializeBot = () => {
 
       if (!orderId) {
         return ctx.reply(
-          "Будь ласка, введіть коректний номер замовлення. Приклад: '1234'"
+          "Будь ласка, введіть коректний номер замовлення. Приклад: '1234'",
         );
       }
 
@@ -1177,7 +1327,7 @@ export const initializeBot = () => {
   bot.command("start", async (ctx) => {
     if (!ctx.from?.username) {
       ctx.reply(
-        "Наш бот не бачить твій nickname (ім'я користувача після @). Зміни будь ласка налаштування безпеки та спробуй наново (наново введи команду /start)."
+        "Наш бот не бачить твій nickname (ім'я користувача після @). Зміни будь ласка налаштування безпеки та спробуй наново (наново введи команду /start).",
       );
 
       return;
@@ -1198,7 +1348,7 @@ export const initializeBot = () => {
     fileHelper.saveUsers(users);
 
     ctx.reply(
-      `Привіт ${username}. Дякую за реєстрацію. Тут будуть приходити сповіщення про призначене на вас замовлення.`
+      `Привіт ${username}. Дякую за реєстрацію. Тут будуть приходити сповіщення про призначене на вас замовлення.`,
     );
   });
 
@@ -1212,7 +1362,7 @@ export const initializeBot = () => {
 
       if (!parts) {
         return ctx.reply(
-          `Формат повідомлення для зміни статусу: статус <філія> <колір>`
+          `Формат повідомлення для зміни статусу: статус <філія> <колір>`,
         );
       }
 
@@ -1221,13 +1371,13 @@ export const initializeBot = () => {
 
       if (!STUDIOS.includes(branch)) {
         return ctx.reply(
-          `Невідома філія. Можливі варіанти: ${STUDIOS.join(", ")}`
+          `Невідома філія. Можливі варіанти: ${STUDIOS.join(", ")}`,
         );
       }
 
       if (!STATUSES.includes(color)) {
         return ctx.reply(
-          `Невідомий статус. Можливі варіанти: ${STATUSES.join(", ")}`
+          `Невідомий статус. Можливі варіанти: ${STATUSES.join(", ")}`,
         );
       }
 
@@ -1251,76 +1401,8 @@ export const initializeBot = () => {
 
       await fs.writeFile(filePath, JSON.stringify(updated, null, 2), "utf-8");
       await ctx.reply(`✅ Статус філії "${branch}" змінено на "${color}"`);
-    }
+    },
   );
-
-  // bot.hears("change_status", async (ctx) => {
-  //   const text = ctx.message?.text || "";
-  //   const args = text.split(" ");
-
-  //   if (args.length < 3) {
-  //     return ctx.reply(
-  //       "Використання: /status <філія> <зелений|жовтий|червоний>"
-  //     );
-  //   }
-
-  //   const branchAlias = args[1]?.toLowerCase();
-  //   const color = args[2]?.toLowerCase();
-
-  //   const allowedColors = ["зелений", "жовтий", "червоний"];
-  //   const colorMap = {
-  //     зелений: "green",
-  //     жовтий: "yellow",
-  //     червоний: "red",
-  //   };
-
-  //   const branchMap = {
-  //     файна: "faina",
-  //     француз: "francuz",
-  //     севен: "seven",
-  //   };
-
-  //   const typedBranchAlias = branchAlias as keyof typeof branchMap;
-
-  //   if (!branchMap[typedBranchAlias]) {
-  //     return ctx.reply("Невідома філія");
-  //   }
-
-  //   if (!allowedColors.includes(color)) {
-  //     return ctx.reply("Дозволені кольори: зелений, жовтий, червоний.");
-  //   }
-
-  //   const filePath = path.join(process.cwd(), "studios.json");
-  //   const file = await fs.readFile(filePath, "utf-8");
-
-  //   const studios = JSON.parse(file);
-
-  //   const updated = studios.map((studio: StudioStatus) => {
-  //     if (studio.id === branchMap[typedBranchAlias]) {
-  //       return {
-  //         ...studio,
-  //         status: colorMap[color as keyof typeof colorMap],
-  //         lastUpdated: dayjs.tz(tz).toISOString(),
-  //       };
-  //     }
-  //     return studio;
-  //   });
-
-  //   await fs.writeFile(filePath, JSON.stringify(updated, null, 2), "utf-8");
-
-  //   ctx.reply(`✅ Статус студії ${branchAlias} змінено на ${color}`);
-  // });
-
-  // bot.command("change_status", async (ctx) => {
-  //   const keyboard = new InlineKeyboard();
-
-  //   for (const studio of STUDIOS) {
-  //     keyboard.text(studio, `select_studio:${studio}`).row();
-  //   }
-
-  //   await ctx.reply("Обери філію для зміни статусу:", {
-  //     reply_markup: keyboard,
-  //   });
-  // });
+ 
   return bot;
 };
