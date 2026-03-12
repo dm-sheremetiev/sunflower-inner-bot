@@ -1,6 +1,6 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { generalSafetyWrapper } from "../helpers/safety.js";
-import { handleCompletedCallAction } from "../services/binotel.services.js";
+import { handleCompletedCallAction } from "../services/binotel.service.js";
 import { CallCompletedBody } from "../types/binotel.js";
 import qs from "qs";
 

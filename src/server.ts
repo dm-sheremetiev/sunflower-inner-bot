@@ -3,7 +3,7 @@ import Fastify from "fastify";
 import "dotenv/config";
 
 import routes from "./routes/index.js";
-import { initializeBot } from "./services/telegram.services.js";
+import { initializeBot } from "./services/telegram.service.js";
 import { scheduleBiotimeCronJobs } from "./controllers/biotime.controller.js";
 import cors from "@fastify/cors";
 import { scheduleWorkloadResetCronJobs } from "./controllers/workload.controller.js";

@@ -11,7 +11,7 @@ import {
   validateOrderStatusChange,
   validateOrderAddressAndRevert,
   checkOrderPaymentsAndRevert,
-} from "../services/keycrm.services.js";
+} from "../services/keycrm.service.js";
 
 // Функция для валидации запроса и извлечения orderId
 const validateOrderChangeEvent = (

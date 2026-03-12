@@ -6,7 +6,7 @@ import {
   Assigned,
   Tag,
 } from "../types/keycrm.js";
-import { fetchOrdersForReserve } from "./keycrm.services.js";
+import { fetchOrdersForReserve } from "./keycrm.service.js";
 import {
   ensureSheetsExist,
   getSheetData,

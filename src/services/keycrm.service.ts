@@ -19,7 +19,7 @@ import {
   sendTelegramMessage,
   sendTelegramMessageToMainAccount,
   sendTelegramMessageToNotificationsChanel,
-} from "./telegram.services.js";
+} from "./telegram.service.js";
 import { Context, HearsContext, Bot, Api, RawApi } from "grammy";
 import axios from "axios";
 import { StorageUploadResponse } from "../types/keycrm.js";
@@ -67,7 +67,7 @@ export interface TagResponse {
 const getOrderInfo = async (orderId: string | number, reply: FastifyReply) => {
   try {
     const res = await keycrmApiClient.get<Order>(
-      `order/${+orderId}?include=assigned,custom_fields,shipping.deliveryService,buyer,manager,products,tags,payments`
+      `order/${+orderId}?include=assigned,custom_fields,shipping.deliveryService,buyer,manager,products,tags,payments`,
     );
 
     return res?.data;
@@ -78,7 +78,7 @@ const getOrderInfo = async (orderId: string | number, reply: FastifyReply) => {
 
 export const sendTelegramMessageAboutOrder = async (
   orderId: string | number,
-  reply: FastifyReply
+  reply: FastifyReply,
 ) => {
   try {
     const order = await getOrderInfo(orderId, reply);
@@ -107,7 +107,7 @@ export const sendTelegramMessageAboutOrder = async (
       const { username } = assignee;
 
       const userEntry = Object.entries(users).find(
-        ([, user]) => (user as TelegramUserDatabase).username === username
+        ([, user]) => (user as TelegramUserDatabase).username === username,
       );
 
       if (userEntry) {
@@ -115,7 +115,11 @@ export const sendTelegramMessageAboutOrder = async (
         try {
           const response = await sendTelegramMessage(chatId, finalMessage);
 
-          results.push({ chatId, status: "success", response: response.data });
+          results.push({
+            chatId,
+            status: "success",
+            response: (response as { data?: unknown })?.data,
+          });
         } catch (error) {
           results.push({
             chatId,
@@ -139,7 +143,7 @@ export const sendTelegramMessageAboutOrder = async (
 export const sendWithoutPackageMessageToManager = async (
   orderId: string | number,
   reply: FastifyReply,
-  isGeneralMessage?: boolean
+  isGeneralMessage?: boolean,
 ) => {
   try {
     const users = fileHelper.loadUsers();
@@ -212,7 +216,7 @@ export const sendWithoutPackageMessageToManager = async (
 
 export const changeOrderStatus = async (
   orderId: number | string,
-  status_id: string
+  status_id: string,
 ) => {
   const res = await keycrmApiClient.put<Order>(`order/${+orderId}`, {
     status_id: +status_id,
@@ -223,7 +227,7 @@ export const changeOrderStatus = async (
 
 export const sendMessageAboutPackage = async (
   orderId: string | number,
-  reply: FastifyReply
+  reply: FastifyReply,
 ) => {
   try {
     const users = fileHelper.loadUsers();
@@ -259,17 +263,17 @@ export const sendMessageAboutPackage = async (
       const res = chatId
         ? await sendTelegramMessage(
             chatId,
-            `Немає відповідальних для замовлення № ${orderId} тому повідомлення не було відправлене`
+            `Немає відповідальних для замовлення № ${orderId} тому повідомлення не було відправлене`,
           )
         : await sendTelegramMessageToMainAccount(
-            `Немає відповідальних для замовлення № ${orderId} тому повідомлення не було відправлене`
+            `Немає відповідальних для замовлення № ${orderId} тому повідомлення не було відправлене`,
           );
 
       return res;
     }
 
     const filteredAssigned = assigned.filter(
-      (as) => !isCourier(as?.username?.toLowerCase())
+      (as) => !isCourier(as?.username?.toLowerCase()),
     );
     const { giftMessage, productComment } = extractCommentsFromOrder(order);
 
@@ -283,7 +287,7 @@ export const sendMessageAboutPackage = async (
       const { username } = assignee;
 
       const userEntry = Object.entries(users).find(
-        ([, user]) => (user as TelegramUserDatabase).username === username
+        ([, user]) => (user as TelegramUserDatabase).username === username,
       );
 
       if (userEntry) {
@@ -305,7 +309,7 @@ export const sendMessageAboutPackage = async (
 export const sendPackedMessageNotification = async (
   orderId: string | number,
   reply: FastifyReply,
-  isGeneralMessage?: boolean
+  isGeneralMessage?: boolean,
 ) => {
   try {
     const users = fileHelper.loadUsers();
@@ -373,7 +377,7 @@ export const sendPackedMessageNotification = async (
 
 export const sendMessageAboutWaiting = async (
   orderId: string | number,
-  reply: FastifyReply
+  reply: FastifyReply,
 ) => {
   try {
     const users = fileHelper.loadUsers();
@@ -418,13 +422,13 @@ export const sendMessageAboutWaiting = async (
       : "";
     // Час
     const timeFieldFlorist = order.custom_fields.find((f) =>
-      f.name.toLowerCase().includes("флор")
+      f.name.toLowerCase().includes("флор"),
     );
     const timeForFlorist = timeFieldFlorist
       ? `час для флористів: ${formatTimeOnly(timeFieldFlorist.value)}, `
       : "";
     const timeFieldCourier = order.custom_fields.find((f) =>
-      f.name.toLowerCase().includes("кур")
+      f.name.toLowerCase().includes("кур"),
     );
     const timeForCourier = timeFieldCourier
       ? `час для кур'єрів: ${formatTimeOnly(timeFieldCourier.value)}, `
@@ -498,7 +502,7 @@ export const addTagToOrder = async (
   ctx: HearsContext<Context>,
   orderId: number | string,
   bot: Bot<Context, Api<RawApi>>,
-  extraArgument: string
+  extraArgument: string,
 ) => {
   try {
     const orderData = await keycrmApiClient.get<Order>(`order/${+orderId}`, {
@@ -507,7 +511,7 @@ export const addTagToOrder = async (
 
     if (!orderData) {
       ctx.reply(
-        "Такого замовлення не існує у системі. Напишіть адміністратору"
+        "Такого замовлення не існує у системі. Напишіть адміністратору",
       );
 
       return;
@@ -517,17 +521,17 @@ export const addTagToOrder = async (
     const availableTags = order.tags || [];
 
     const tagExists = availableTags.some((tag) =>
-      tag.name.toLowerCase().includes("букет на складі")
+      tag.name.toLowerCase().includes("букет на складі"),
     );
 
     if (tagExists) {
       ctx.reply(
-        `Замовлення ${orderId} успішно змінило свій тег на "БУКЕТ НА СКЛАДІ. Знаходиться: ${extraArgument || "не вказано"}`
+        `Замовлення ${orderId} успішно змінило свій тег на "БУКЕТ НА СКЛАДІ. Знаходиться: ${extraArgument || "не вказано"}`,
       );
 
       await bot.api.sendMessage(
         chatIdWarehouse,
-        `Замовлення ${orderId} успішно змінило свій тег на "БУКЕТ НА СКЛАДІ. Знаходиться: ${extraArgument || "не вказано"}`
+        `Замовлення ${orderId} успішно змінило свій тег на "БУКЕТ НА СКЛАДІ. Знаходиться: ${extraArgument || "не вказано"}`,
       );
 
       return;
@@ -539,7 +543,7 @@ export const addTagToOrder = async (
 
     if (!tagsResponse?.data || !Array.isArray(tagsResponse.data.data)) {
       ctx.reply(
-        "Не вдалося отримати список тегів. Зверніться до адміністратора"
+        "Не вдалося отримати список тегів. Зверніться до адміністратора",
       );
 
       return;
@@ -547,7 +551,7 @@ export const addTagToOrder = async (
 
     const tags = tagsResponse.data.data;
     const tagToAdd = tags.find((tag) =>
-      tag.name.toLowerCase().includes("букет на складі")
+      tag.name.toLowerCase().includes("букет на складі"),
     );
 
     if (tagToAdd) {
@@ -562,21 +566,21 @@ export const addTagToOrder = async (
       `/order/${+orderId}/tag/${tagToAdd.id}`,
       {
         tags: availableTags,
-      }
+      },
     );
 
     try {
       await bot.api.sendMessage(
         chatIdWarehouse,
-        `Замовлення ${orderId} успішно змінило свій тег на "БУКЕТ НА СКЛАДІ. Знаходиться: ${extraArgument || "не вказано"}`
+        `Замовлення ${orderId} успішно змінило свій тег на "БУКЕТ НА СКЛАДІ. Знаходиться: ${extraArgument || "не вказано"}`,
       );
 
       ctx.reply(
-        `Замовлення ${orderId} успішно змінило свій тег на "БУКЕТ НА СКЛАДІ. Знаходиться: ${extraArgument || "не вказано"}`
+        `Замовлення ${orderId} успішно змінило свій тег на "БУКЕТ НА СКЛАДІ. Знаходиться: ${extraArgument || "не вказано"}`,
       );
     } catch {
       ctx.reply(
-        `Замовлення ${orderId} успішно змінило свій тег на "БУКЕТ НА СКЛАДІ але повідомлення не було відправлено у групу`
+        `Замовлення ${orderId} успішно змінило свій тег на "БУКЕТ НА СКЛАДІ але повідомлення не було відправлено у групу`,
       );
     }
 
@@ -590,7 +594,7 @@ export const addTagToOrder = async (
 
 export const sendMessageAboutNewOrder = async (
   orderId: string | number,
-  reply: FastifyReply
+  reply: FastifyReply,
 ) => {
   try {
     const users = fileHelper.loadUsers();
@@ -618,7 +622,7 @@ export const sendMessageAboutNewOrder = async (
       assignedMessage = `. Відповідальні: ${assignedPeople}`;
     } else {
       await sendTelegramMessageToMainAccount(
-        `Замовлення № ${orderId} змінило статус, але менеджер не назначив відповідальних.`
+        `Замовлення № ${orderId} змінило статус, але менеджер не назначив відповідальних.`,
       );
 
       return;
@@ -636,7 +640,7 @@ export const sendMessageAboutNewOrder = async (
       const { username } = assignee;
 
       const userEntry = Object.entries(users).find(
-        ([, user]) => (user as TelegramUserDatabase).username === username
+        ([, user]) => (user as TelegramUserDatabase).username === username,
       );
 
       if (userEntry) {
@@ -644,7 +648,11 @@ export const sendMessageAboutNewOrder = async (
         try {
           const response = await sendTelegramMessage(chatId, finalMessage);
 
-          results.push({ chatId, status: "success", response: response.data });
+          results.push({
+            chatId,
+            status: "success",
+            response: (response as { data?: unknown })?.data,
+          });
         } catch (error) {
           results.push({
             chatId,
@@ -666,7 +674,7 @@ export const sendMessageAboutNewOrder = async (
 export const sendImageToCustomerChat = async (
   reply: FastifyReply,
   orderId: number,
-  attachmentIndex = 0
+  attachmentIndex = 0,
 ) => {
   reply.status(200).send({ ok: true });
 
@@ -675,18 +683,18 @@ export const sendImageToCustomerChat = async (
     const normalizedOrderId = Number(orderId);
     if (isNaN(normalizedOrderId)) {
       throw new Error(
-        `Невірний номер замовлення: ${orderId}. Відправте фото вручну.`
+        `Невірний номер замовлення: ${orderId}. Відправте фото вручну.`,
       );
     }
 
     // Get order info
     const { data: order } = await keycrmAdminApiClient.get<AdminOrder>(
-      `/orders/${normalizedOrderId}`
+      `/orders/${normalizedOrderId}`,
     );
 
     if (!order) {
       throw new Error(
-        `Не було знайдено замовлення із №${normalizedOrderId}. Відправте фото вручну.`
+        `Не було знайдено замовлення із №${normalizedOrderId}. Відправте фото вручну.`,
       );
     }
 
@@ -694,7 +702,7 @@ export const sendImageToCustomerChat = async (
       order?.tags?.find((tag) => tag?.name?.toLowerCase().includes("блогер"))
     ) {
       throw new Error(
-        `Замовлення №${normalizedOrderId} для блогера, тому фото не було відправлено.`
+        `Замовлення №${normalizedOrderId} для блогера, тому фото не було відправлено.`,
       );
     }
 
@@ -702,7 +710,7 @@ export const sendImageToCustomerChat = async (
       order?.tags?.find((tag) => tag?.name?.toLowerCase().includes("скарга"))
     ) {
       throw new Error(
-        `Замовлення №${normalizedOrderId} має тег "скарга", тому фото не було відправлено.`
+        `Замовлення №${normalizedOrderId} має тег "скарга", тому фото не було відправлено.`,
       );
     }
 
@@ -736,7 +744,10 @@ export const sendImageToCustomerChat = async (
       try {
         await sendTelegramMessage(photoApprovalChatId, msg);
       } catch (e) {
-        console.error("Failed to send Telegram (shipping date not today/tomorrow):", e);
+        console.error(
+          "Failed to send Telegram (shipping date not today/tomorrow):",
+          e,
+        );
       }
       return;
     }
@@ -748,7 +759,7 @@ export const sendImageToCustomerChat = async (
       throw new Error(
         branchNames.length
           ? `${branchNames}. У замовлення №${normalizedOrderId} не було прикріплено жодного фото. Статус було змінено без автоматичного повідомлення у чат із клієнтом`
-          : `Без тегу філії. У замовлення №${normalizedOrderId} не було прикріплено жодного фото. Статус було змінено без автоматичного повідомлення у чат із клієнтом. Замовлення немає тегу філії.`
+          : `Без тегу філії. У замовлення №${normalizedOrderId} не було прикріплено жодного фото. Статус було змінено без автоматичного повідомлення у чат із клієнтом. Замовлення немає тегу філії.`,
       );
     }
 
@@ -776,7 +787,7 @@ export const sendImageToCustomerChat = async (
 
     if (!targetFile.url && !targetFile.thumbnail) {
       throw new Error(
-        `Замовлення №${order.id}. Фото з індексом ${attachmentIndex} не має URL або thumbnail. Будь ласка, надішліть фото вручну.${assignedText}`
+        `Замовлення №${order.id}. Фото з індексом ${attachmentIndex} не має URL або thumbnail. Будь ласка, надішліть фото вручну.${assignedText}`,
       );
     }
 
@@ -787,12 +798,12 @@ export const sendImageToCustomerChat = async (
 
     if (!conversations.length) {
       throw new Error(
-        `${branchNames?.length > 0 ? `${branchNames}. `: ""}Замовлення №${order.id}. Не було знайдено чату. Відправте фото вручну. ${assignedPeople}`
+        `${branchNames?.length > 0 ? `${branchNames}. ` : ""}Замовлення №${order.id}. Не було знайдено чату. Відправте фото вручну. ${assignedPeople}`,
       );
     }
 
     const latest = conversations.reduce((a, b) =>
-      new Date(b.updated_at) > new Date(a.updated_at) ? b : a
+      new Date(b.updated_at) > new Date(a.updated_at) ? b : a,
     );
 
     const conversationId = latest.id;
@@ -812,7 +823,7 @@ export const sendImageToCustomerChat = async (
 
     if (!uploadedFileUrl) {
       throw new Error(
-        `Замовлення №${order.id}. Фото не має доступного URL. Будь ласка, надішліть фото вручну.${assignedText}`
+        `Замовлення №${order.id}. Фото не має доступного URL. Будь ласка, надішліть фото вручну.${assignedText}`,
       );
     }
 
@@ -821,14 +832,14 @@ export const sendImageToCustomerChat = async (
       try {
         uploadedFileUrl = await downloadAndUploadFile(
           targetFile.url,
-          targetFile.file_name || "image.jpg"
+          targetFile.file_name || "image.jpg",
         );
       } catch (uploadError) {
         // If upload fails, use original URL or thumbnail
         uploadedFileUrl = targetFile.url || targetFile.thumbnail;
         console.error(
           `Failed to re-upload large file for order ${order.id}, using original URL:`,
-          uploadError
+          uploadError,
         );
       }
     }
@@ -843,12 +854,12 @@ export const sendImageToCustomerChat = async (
           is_email: false,
           attachments: [],
           conversation_id: conversationId,
-        }
+        },
       );
     } catch (textMessageError) {
       console.error(
         `Failed to send text message for order ${order.id}:`,
-        textMessageError
+        textMessageError,
       );
       // Continue with image sending even if text message fails
     }
@@ -872,11 +883,11 @@ export const sendImageToCustomerChat = async (
             },
           ],
           conversation_id: conversationId,
-        }
+        },
       );
     } catch (imageMessageError) {
       throw new Error(
-        `Не вдалося відправити фото для замовлення №${order.id}. Помилка: ${imageMessageError instanceof Error ? imageMessageError.message : String(imageMessageError)}.${assignedText}`
+        `Не вдалося відправити фото для замовлення №${order.id}. Помилка: ${imageMessageError instanceof Error ? imageMessageError.message : String(imageMessageError)}.${assignedText}`,
       );
     }
   } catch (err: unknown) {
@@ -889,12 +900,12 @@ export const sendImageToCustomerChat = async (
     try {
       await sendTelegramMessage(
         photoApprovalChatId,
-        errorMessage || generalErrorMessage
+        errorMessage || generalErrorMessage,
       );
     } catch (telegramError) {
       console.error(
         `Failed to send error message to Telegram for order ${normalizedOrderId}:`,
-        telegramError
+        telegramError,
       );
     }
   } finally {
@@ -909,7 +920,7 @@ export const sendImageToCustomerChat = async (
  */
 async function downloadAndUploadFile(
   fileUrl: string,
-  fileName: string
+  fileName: string,
 ): Promise<string> {
   try {
     // Download file from URL
@@ -949,7 +960,7 @@ async function downloadAndUploadFile(
           ...form.getHeaders(),
         },
         timeout: 60000, // 60 seconds timeout for upload
-      }
+      },
     );
 
     if (!uploadResponse.data?.url) {
@@ -970,10 +981,11 @@ async function downloadAndUploadFile(
  * Перевіряє назву статусу та наявність тегу "Самовивіз".
  */
 export const isOrderSelfPickup = (order: Order): boolean => {
-  const statusName = (order.status as { name?: string } | undefined)?.name ?? "";
+  const statusName =
+    (order.status as { name?: string } | undefined)?.name ?? "";
   if (statusName.toLowerCase().includes("самовивіз")) return true;
   const hasSelfPickupTag = order.tags?.some((tag) =>
-    (tag.name ?? "").toLowerCase().includes("самовивіз")
+    (tag.name ?? "").toLowerCase().includes("самовивіз"),
   );
   return !!hasSelfPickupTag;
 };
@@ -989,13 +1001,15 @@ export type PaymentValidationResult =
  * Перевіряє оплати замовлення: для не-самовивозу потрібна хоча б одна оплата, у кожної — description.
  * Оплати зі status "canceled" не враховуються (тільки при перевірці на вебхуку).
  */
-export const validateOrderPayments = (order: Order): PaymentValidationResult => {
+export const validateOrderPayments = (
+  order: Order,
+): PaymentValidationResult => {
   if (isOrderSelfPickup(order)) {
     return { skip: true, reason: "self_pickup" };
   }
 
   const hasPaidProduct = (order.products ?? []).some(
-    (p) => (p.price_sold ?? p.price ?? 0) > 0
+    (p) => (p.price_sold ?? p.price ?? 0) > 0,
   );
   if (!hasPaidProduct) {
     return { skip: true, reason: "no_paid_products" };
@@ -1005,7 +1019,7 @@ export const validateOrderPayments = (order: Order): PaymentValidationResult => 
   const payments =
     allPayments && Array.isArray(allPayments)
       ? allPayments.filter(
-          (p) => p != null && (p.status ?? "").toLowerCase() !== "canceled"
+          (p) => p != null && (p.status ?? "").toLowerCase() !== "canceled",
         )
       : [];
 
@@ -1017,7 +1031,7 @@ export const validateOrderPayments = (order: Order): PaymentValidationResult => 
   }
 
   const withoutDescription = payments.filter(
-    (p) => p == null || (p.description ?? "").toString().trim() === ""
+    (p) => p == null || (p.description ?? "").toString().trim() === "",
   );
   if (withoutDescription.length > 0) {
     return {
@@ -1035,12 +1049,12 @@ export const validateOrderPayments = (order: Order): PaymentValidationResult => 
  */
 export const checkOrderPaymentsAndRevert = async (
   orderId: string | number,
-  reply?: FastifyReply
+  reply?: FastifyReply,
 ) => {
   const log = reply?.log ?? console;
   try {
     const res = await keycrmApiClient.get<Order>(
-      `order/${+orderId}?include=assigned,custom_fields,shipping.deliveryService,buyer,manager,products,tags,status,payments`
+      `order/${+orderId}?include=assigned,custom_fields,shipping.deliveryService,buyer,manager,products,tags,status,payments`,
     );
     const order = res?.data;
     if (!order) {
@@ -1063,7 +1077,10 @@ export const checkOrderPaymentsAndRevert = async (
         ? `@${order.manager.username}\n`
         : "";
       const orderLink = `\nhttps://sunflower.keycrm.app/app/orders/view/${orderId}`;
-      await sendTelegramMessage(managersChatId, managerText + message + orderLink);
+      await sendTelegramMessage(
+        managersChatId,
+        managerText + message + orderLink,
+      );
     }
     return {
       ok: false,
@@ -1084,12 +1101,12 @@ export const checkOrderPaymentsAndRevert = async (
  */
 export const validateOrderStatusChange = async (
   orderId: string | number,
-  reply: FastifyReply
+  reply: FastifyReply,
 ) => {
   try {
     // Get order with status included
     const res = await keycrmApiClient.get<Order>(
-      `order/${+orderId}?include=assigned,custom_fields,shipping.deliveryService,buyer,manager,products,tags,status`
+      `order/${+orderId}?include=assigned,custom_fields,shipping.deliveryService,buyer,manager,products,tags,status`,
     );
 
     const order = res?.data;
@@ -1120,8 +1137,8 @@ export const validateOrderStatusChange = async (
     // Check if order has a branch tag
     const hasBranchTag = tags?.some((tag) =>
       BRANCH_TAGS.some((branchName) =>
-        tag.name.toLowerCase().includes(branchName.toLowerCase())
-      )
+        tag.name.toLowerCase().includes(branchName.toLowerCase()),
+      ),
     );
     if (!hasBranchTag) {
       errors.push("немає тегу філії.");
@@ -1170,12 +1187,12 @@ export const validateOrderStatusChange = async (
  */
 export const validateOrderAddressAndRevert = async (
   orderId: string | number,
-  reply?: FastifyReply
+  reply?: FastifyReply,
 ) => {
   const log = reply?.log ?? console;
   try {
     const res = await keycrmApiClient.get<Order>(
-      `order/${+orderId}?include=assigned,custom_fields,shipping.deliveryService,buyer,manager,products,tags,status`
+      `order/${+orderId}?include=assigned,custom_fields,shipping.deliveryService,buyer,manager,products,tags,status`,
     );
     const order = res?.data;
     if (!order) {
@@ -1199,8 +1216,7 @@ export const validateOrderAddressAndRevert = async (
     const secondary = (shipping?.shipping_secondary_line ?? "").trim();
     const receivePoint = (shipping?.shipping_receive_point ?? "").trim();
 
-    const hasAddress =
-      !!city || !!region || !!secondary || !!receivePoint;
+    const hasAddress = !!city || !!region || !!secondary || !!receivePoint;
     const hasCoordinates = !!zip;
     const validCoordinatesFormat = COORDINATES_REGEX.test(zip);
     const statusGroupId = status?.group_id ?? order.status_group_id;
@@ -1208,15 +1224,17 @@ export const validateOrderAddressAndRevert = async (
     const reasons: string[] = [];
 
     if (hasAddress && !hasCoordinates) {
-      reasons.push("вказана адреса доставки, але не вказані координати (індекс)");
+      reasons.push(
+        "вказана адреса доставки, але не вказані координати (індекс)",
+      );
     }
     if (hasCoordinates && !validCoordinatesFormat) {
       reasons.push(
-        'координати не у форматі "число, число" (наприклад 50.45, 30.52)'
+        'координати не у форматі "число, число" (наприклад 50.45, 30.52)',
       );
     }
     if (!hasAddress && statusGroupId === 4) {
-      reasons.push("адреса не встановлена, а статус у групі \"Доставки\"");
+      reasons.push('адреса не встановлена, а статус у групі "Доставки"');
     }
 
     if (reasons.length === 0) {
@@ -1224,9 +1242,7 @@ export const validateOrderAddressAndRevert = async (
     }
 
     await changeOrderStatus(orderId, ADDRESS_REVERT_STATUS_ID);
-    const managerText = manager?.username
-      ? `@${manager.username}\n`
-      : "";
+    const managerText = manager?.username ? `@${manager.username}\n` : "";
     const orderLink = `\nhttps://sunflower.keycrm.app/app/orders/view/${orderId}`;
     const message = `${managerText}Замовлення №${orderId}: ${reasons.join("; ")}. Замовлення на статусі «Помилка».\n${orderLink}`;
     if (managersChatId) {
