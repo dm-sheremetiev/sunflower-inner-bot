@@ -1,8 +1,6 @@
 import axios from "axios";
-import fs from "fs/promises";
 
 import "dotenv/config";
-import path from "path";
 import { server } from "../server.js";
 
 const apiKey = process?.env.KEYCRM_API_KEY || "";
@@ -10,7 +8,7 @@ const apiUrl = process?.env.KEYCRM_API_URL || "";
 const KEYCRM_ADMIN_API_URL = process.env.KEYCRM_ADMIN_API_URL;
 const KEYCRM_ADMIN_USERNAME = process.env.KEYCRM_ADMIN_USERNAME;
 const KEYCRM_ADMIN_PASSWORD = process.env.KEYCRM_ADMIN_PASSWORD;
-const TOKEN_PATH = path.join(process.cwd(), "data", "token.txt");
+const KEYCRM_ADMIN_TOKEN = process.env.KEYCRM_ADMIN_TOKEN;
 
 export const keycrmApiClient = axios.create({
   baseURL: apiUrl,
@@ -25,12 +23,11 @@ const LOGIN_CREDENTIALS = {
   password: KEYCRM_ADMIN_PASSWORD,
 };
 
+let cachedAdminToken: string | null = KEYCRM_ADMIN_TOKEN || null;
+
 async function getToken() {
-  try {
-    return await fs.readFile(TOKEN_PATH, "utf8");
-  } catch {
-    return await refreshToken();
-  }
+  if (cachedAdminToken) return cachedAdminToken;
+  return await refreshToken();
 }
 
 async function refreshToken() {
@@ -39,8 +36,7 @@ async function refreshToken() {
     LOGIN_CREDENTIALS
   );
   const token = data.access_token;
-
-  await fs.writeFile(TOKEN_PATH, token);
+  cachedAdminToken = token;
   return token;
 }
 
