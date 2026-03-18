@@ -14,7 +14,7 @@ dayjs.extend(timezone);
  */
 export const formatTimeOnly = (timeValue: string | number): string => {
   if (!timeValue) return String(timeValue);
-  
+
   try {
     const parsed = dayjs(timeValue);
     if (parsed.isValid()) {
@@ -23,7 +23,7 @@ export const formatTimeOnly = (timeValue: string | number): string => {
   } catch {
     // Если не удалось распарсить, возвращаем исходное значение
   }
-  
+
   return String(timeValue);
 };
 
@@ -66,16 +66,25 @@ const formatOrderMessage = (order: Order) => {
   return finalMessage;
 };
 
-const formatMyOrdersMessage = (orders: Order[], crmUser: any): string[] => {
+const formatMyOrdersMessage = (
+  orders: Order[],
+  crmUser: { crmUserId?: number; username?: string },
+): string[] => {
   const filteredOrders = orders.filter((order) => {
-    if (crmUser.crmUserId && order.manager?.id === crmUser.crmUserId) return true;
-    if (crmUser.crmUserId && order.assigned?.some((as) => as.id === crmUser.crmUserId)) return true;
-    
+    if (crmUser.crmUserId && order.manager?.id === crmUser.crmUserId)
+      return true;
+    if (
+      crmUser.crmUserId &&
+      order.assigned?.some((as) => as.id === crmUser.crmUserId)
+    )
+      return true;
+
     // fallback to username
     const username = crmUser.username?.toLowerCase();
     if (username) {
       if (order?.manager?.username?.toLowerCase() === username) return true;
-      if (order.assigned?.some((as) => as.username?.toLowerCase() === username)) return true;
+      if (order.assigned?.some((as) => as.username?.toLowerCase() === username))
+        return true;
     }
     return false;
   });
@@ -89,13 +98,20 @@ const formatMyOrdersMessage = (orders: Order[], crmUser: any): string[] => {
   filteredOrders.forEach((order) => {
     const fieldDate = order.shipping.shipping_date_actual || dayjs().toString();
     const date = dayjs(fieldDate).format("DD-MM-YYYY");
-    
-    const timeWindowField = order.custom_fields?.find(f => f.uuid === "OR_1006" || f.name.toLowerCase().includes("часовий проміжок"));
-    const timeWindow = timeWindowField?.value ? String(timeWindowField.value) : "Не визначено";
+
+    const timeWindowField = order.custom_fields?.find(
+      (f) =>
+        f.uuid === "OR_1006" ||
+        f.name.toLowerCase().includes("часовий проміжок"),
+    );
+    const timeWindow = timeWindowField?.value
+      ? String(timeWindowField.value)
+      : "Не визначено";
 
     if (!groupedByDateAndWindow[date]) groupedByDateAndWindow[date] = {};
-    if (!groupedByDateAndWindow[date][timeWindow]) groupedByDateAndWindow[date][timeWindow] = [];
-    
+    if (!groupedByDateAndWindow[date][timeWindow])
+      groupedByDateAndWindow[date][timeWindow] = [];
+
     groupedByDateAndWindow[date][timeWindow].push(order);
   });
 
@@ -128,54 +144,85 @@ const formatMyOrdersMessage = (orders: Order[], crmUser: any): string[] => {
       if (b === "Не визначено" && a !== "Не визначено") return -1;
       return a.localeCompare(b);
     });
-    
+
     for (const timeWindow of windows) {
       addLine(`📌 _${escapeAllSymbols(timeWindow)}_\n`);
 
       groupedByDateAndWindow[date][timeWindow].forEach((order) => {
         let orderText = ``;
-        
-        const productsString = order?.products?.length && order?.products[0]?.name
-          ? `назва: ${order?.products[0]?.name}, `
+
+        const productsString =
+          order?.products?.length && order?.products[0]?.name
+            ? `назва: ${order?.products[0]?.name}, `
+            : "";
+
+        const art = order?.products?.[0]?.sku
+          ? `арт.: ${order?.products[0]?.sku}, `
           : "";
 
-        const art = order?.products?.[0]?.sku ? `арт.: ${order?.products[0]?.sku}, ` : "";
-
-        const street = order?.shipping?.shipping_receive_point ? order?.shipping?.shipping_receive_point + ", " : "";
-        const secondaryStreet = order?.shipping?.shipping_secondary_line ? order?.shipping?.shipping_secondary_line + " " : "";
-        const city = order?.shipping?.shipping_address_city ? order?.shipping?.shipping_address_city + ", " : "";
+        const street = order?.shipping?.shipping_receive_point
+          ? order?.shipping?.shipping_receive_point + ", "
+          : "";
+        const secondaryStreet = order?.shipping?.shipping_secondary_line
+          ? order?.shipping?.shipping_secondary_line + " "
+          : "";
+        const city = order?.shipping?.shipping_address_city
+          ? order?.shipping?.shipping_address_city + ", "
+          : "";
         const address = city + street + secondaryStreet;
-        const fullAddress = address.trim().length ? `адреса: ${address.trim()}, ` : "";
+        const fullAddress = address.trim().length
+          ? `адреса: ${address.trim()}, `
+          : "";
 
-        const giftMessage = order.gift_message ? `листівка: ${order.gift_message}, ` : "";
-        const comment = order?.buyer_comment ? `коментар: ${order.buyer_comment}, ` : "";
-        const productComment = order.products?.[0]?.comment ? `коментар: ${order.products?.[0]?.comment}, ` : "";
+        const giftMessage = order.gift_message
+          ? `листівка: ${order.gift_message}, `
+          : "";
+        const comment = order?.buyer_comment
+          ? `коментар: ${order.buyer_comment}, `
+          : "";
+        const productComment = order.products?.[0]?.comment
+          ? `коментар: ${order.products?.[0]?.comment}, `
+          : "";
 
-        let phoneNumber = order.shipping?.recipient_phone || order.buyer?.phone;
+        const phoneNumber =
+          order.shipping?.recipient_phone || order.buyer?.phone;
         let number = "";
         if (phoneNumber) {
-          const escapedPhone = phoneNumber.replaceAll("+", "\\+").replaceAll(".", "");
+          const escapedPhone = phoneNumber
+            .replaceAll("+", "\\+")
+            .replaceAll(".", "");
           number = order.shipping?.recipient_phone
             ? `отримувач: \`${escapedPhone}\``
             : `замовник: \`${escapedPhone}\``;
         }
 
         let customFieldsText = "";
-        const targetUuids = ["OR_1007", "OR_1011", "OR_1012", "OR_1015", "OR_1017"];
+        const targetUuids = [
+          "OR_1007",
+          "OR_1011",
+          "OR_1012",
+          "OR_1015",
+          "OR_1017",
+        ];
         const targetNames: Record<string, string> = {
-          "OR_1007": "Район",
-          "OR_1011": "Пробито",
-          "OR_1012": "Листівка перев.",
-          "OR_1015": "Комп.",
-          "OR_1017": "Кульки"
+          OR_1007: "Район",
+          OR_1011: "Пробито",
+          OR_1012: "Листівка перев.",
+          OR_1015: "Комп.",
+          OR_1017: "Кульки",
         };
-        
-        targetUuids.forEach(uuid => {
-          const field = order.custom_fields?.find(f => f.uuid === uuid || f.name.includes(targetNames[uuid]));
+
+        targetUuids.forEach((uuid) => {
+          const field = order.custom_fields?.find(
+            (f) => f.uuid === uuid || f.name.includes(targetNames[uuid]),
+          );
           if (field && field.value) {
-             let valStr = Array.isArray(field.value) ? field.value.join(", ") : String(field.value);
-             if (typeof field.value === "boolean") valStr = field.value ? "Так" : "Ні";
-             customFieldsText += `${targetNames[uuid]}: ${valStr}, `;
+            let valStr = Array.isArray(field.value)
+              ? field.value.join(", ")
+              : String(field.value);
+            if (typeof field.value === "boolean")
+              valStr = field.value ? "Так" : "Ні";
+            customFieldsText += `${targetNames[uuid]}: ${valStr}, `;
           }
         });
 
@@ -185,7 +232,7 @@ const formatMyOrdersMessage = (orders: Order[], crmUser: any): string[] => {
         orderText += `*${order.id}* \\- ` + escapeAllSymbols(cleanInfo);
         if (cleanInfo && number) orderText += ", ";
         if (number) orderText += number;
-        
+
         addLine(orderText + `\n\n`);
       });
     }

@@ -13,7 +13,6 @@ import {
   messageHelper,
 } from "../helpers/messageHelper.js";
 import { fileHelper } from "../helpers/fileHelper.js";
-import { TelegramUserDatabase } from "../types/telegram.js";
 import {
   isCourier,
   sendTelegramMessage,
@@ -33,7 +32,6 @@ const KYIV_TZ = "Europe/Kyiv";
 
 /** ID чату складу для повідомлень про тег "букет на складі" */
 export const WAREHOUSE_CHAT_ID = "-1002318769632";
-const chatIdWarehouse = WAREHOUSE_CHAT_ID;
 const INITIAL_STATUS_ID = "1";
 /** Статус, на який відкатуємо замовлення при невалідній адресі/координатах */
 const ADDRESS_REVERT_STATUS_ID = "31";
@@ -108,7 +106,7 @@ export const sendTelegramMessageAboutOrder = async (
       const { username } = assignee;
 
       const userEntry = Object.entries(users).find(
-        ([, user]) => (user as any).username === username,
+        ([, user]) => (user as { username?: string }).username === username,
       );
 
       if (userEntry) {
@@ -288,7 +286,7 @@ export const sendMessageAboutPackage = async (
       const { username } = assignee;
 
       const userEntry = Object.entries(users).find(
-        ([, user]) => (user as any).username === username,
+        ([, user]) => (user as { username?: string }).username === username,
       );
 
       if (userEntry) {
@@ -518,7 +516,8 @@ export async function addTagToOrderInCrm(
     if (!orderData?.data) {
       return {
         success: false,
-        userMessage: "Такого замовлення не існує у системі. Напишіть адміністратору",
+        userMessage:
+          "Такого замовлення не існує у системі. Напишіть адміністратору",
       };
     }
 
@@ -543,7 +542,8 @@ export async function addTagToOrderInCrm(
     if (!tagsResponse?.data?.data || !Array.isArray(tagsResponse.data.data)) {
       return {
         success: false,
-        userMessage: "Не вдалося отримати список тегів. Зверніться до адміністратора",
+        userMessage:
+          "Не вдалося отримати список тегів. Зверніться до адміністратора",
       };
     }
 
@@ -560,10 +560,9 @@ export async function addTagToOrderInCrm(
     }
 
     availableTags.push(tagToAdd);
-    await keycrmApiClient.post<Order>(
-      `/order/${+orderId}/tag/${tagToAdd.id}`,
-      { tags: availableTags },
-    );
+    await keycrmApiClient.post<Order>(`/order/${+orderId}/tag/${tagToAdd.id}`, {
+      tags: availableTags,
+    });
 
     return {
       success: true,
@@ -615,7 +614,9 @@ export const sendMessageAboutNewOrder = async (
       return;
     }
 
-    const finalMessage = `Нове замовлення №${orderId}${assignedMessage}.`;
+    // Для чатів, де менеджеру потрібно подивитися контекст замовлення з призначеними відповідальними,
+    // використовуємо ту саму формулу, що й у повідомленнях про призначення.
+    const finalMessage = `${messageHelper.formatOrderMessage(order)}${assignedMessage}`;
 
     const results: Array<
       | { chatId: string; status: string; response?: unknown }
@@ -627,7 +628,7 @@ export const sendMessageAboutNewOrder = async (
       const { username } = assignee;
 
       const userEntry = Object.entries(users).find(
-        ([, user]) => (user as any).username === username,
+        ([, user]) => (user as { username?: string }).username === username,
       );
 
       if (userEntry) {

@@ -217,7 +217,9 @@ function buildOrderDetailsText(order: OrderWithAttachments): string {
     /(^|\\s)(XL|XXL)(\\s|$)/i.test(String(t.name ?? "")),
   );
   const paymentStatus = translatePaymentStatus(order.payment_status);
-  const anyStatus = order.status as unknown as { alias?: string; name?: string } | undefined;
+  const anyStatus = order.status as unknown as
+    | { alias?: string; name?: string }
+    | undefined;
   const orderStatus = translateOrderStatus(anyStatus?.alias, anyStatus?.name);
 
   const productsTotal = (order.products ?? []).reduce((sum, p) => {
@@ -474,7 +476,9 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
     const attachments = (order as OrderWithAttachments).attachments ?? [];
     const urls: string[] = attachments
       .map((a) => a.file?.url)
-      .filter((u): u is string => typeof u === "string" && u.startsWith("http"));
+      .filter(
+        (u): u is string => typeof u === "string" && u.startsWith("http"),
+      );
 
     if (urls.length === 1) {
       try {
@@ -521,7 +525,9 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
     const attachments = (order as OrderWithAttachments).attachments ?? [];
     const urls: string[] = attachments
       .map((a) => a.file?.url)
-      .filter((u): u is string => typeof u === "string" && u.startsWith("http"));
+      .filter(
+        (u): u is string => typeof u === "string" && u.startsWith("http"),
+      );
 
     if (urls.length === 1) {
       try {

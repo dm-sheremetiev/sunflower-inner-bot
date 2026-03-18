@@ -35,9 +35,7 @@ function formatPassCaption(pass: {
   return `${name}\n${pass.visitorName ?? ""}\n\nПеріод дії перепустки\n${from}\n${to}`;
 }
 
-function parsePassArgs(
-  text: string,
-): { complexId?: number; count: number } {
+function parsePassArgs(text: string): { complexId?: number; count: number } {
   const parts = text.trim().toLowerCase().split(/\s+/).filter(Boolean);
   let complexId: number | undefined;
   let count = 1;
