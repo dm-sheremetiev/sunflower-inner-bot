@@ -12,12 +12,8 @@ export const authMiddleware = async (
   const chatId = ctx.from?.id;
   if (!chatId) return next();
 
-  // Allow /start command to pass through
-  if (ctx.message?.text?.startsWith("/start")) {
-    return next();
-  }
-
   const { isAuth, user } = isUserAuthenticated(chatId);
+  const isStartCommand = !!ctx.message?.text?.startsWith("/start");
 
   // Try authenticating if not authenticated
   if (!isAuth) {
@@ -50,7 +46,9 @@ export const authMiddleware = async (
 
     const loadingMsg = await ctx.reply("Перевірка доступу...");
     
-    const result = await processAuthentication(chatId, username, text, contact);
+    // Для /start не використовуємо text="/start" як логін — пробуємо по username.
+    const authText = isStartCommand ? undefined : text;
+    const result = await processAuthentication(chatId, username, authText, contact);
 
     try {
       const chatToDelete = ctx.chat?.id ?? chatId;
@@ -63,7 +61,9 @@ export const authMiddleware = async (
       await ctx.reply(result.message, {
         reply_markup: { remove_keyboard: true },
       });
-      // Don't next() if they just typed their login, as it's not a real command
+      // Якщо це /start — дати пройти хендлеру, щоб він показав наступні дії.
+      if (isStartCommand) return next();
+      // Якщо це ввід логіну/телефону — не проганяємо далі як команду.
       return;
     } else {
       await ctx.reply(result.message, { reply_markup: { remove_keyboard: true } });

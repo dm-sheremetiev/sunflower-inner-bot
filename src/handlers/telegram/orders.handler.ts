@@ -38,11 +38,7 @@ function translateStatus(o: UserOrderSummary): string {
 }
 
 function formatOrderButtonLabel(order: UserOrderSummary): string {
-  const timeWindow = (order.timeWindow?.trim() || "Не визначено").replace(/\s+/g, " ");
-  const suffix = ` (${timeWindow})`;
-  const label = `${order.id}${suffix}`;
-  // Telegram button text limit is 64 chars
-  return label.length > 64 ? `${order.id} (${timeWindow.slice(0, 55)}…)` : label;
+  return String(order.id);
 }
 
 function buildOrdersListKeyboard(orders: UserOrderSummary[], page: number): InlineKeyboard {
@@ -70,22 +66,43 @@ function buildOrdersListKeyboard(orders: UserOrderSummary[], page: number): Inli
 function buildOrdersListText(orders: UserOrderSummary[], page: number): string {
   const start = page * PAGE_SIZE;
   const slice = orders.slice(start, start + PAGE_SIZE);
-  const lines = slice.map((o) => {
-    const date = o.shippingDateIso ? dayjs(o.shippingDateIso).format("DD.MM.YYYY") : "Не визначено";
-    const timeWindow = o.timeWindow?.trim().length ? o.timeWindow : "Не визначено";
-    const status = escapeAllSymbols(translateStatus(o) || "—");
-    const total = typeof o.grandTotal === "number" ? `${o.grandTotal} грн` : "—";
-    const address = o.address?.trim().length ? escapeAllSymbols(o.address) : "—";
-    return (
-      `*${o.id}* \\(${escapeAllSymbols(date)}\\)\n` +
-      `Статус: ${status}\n` +
-      `💰 Загальна вартість: ${escapeAllSymbols(total)}\n` +
-      `🕒 ${escapeAllSymbols(timeWindow)}\n` +
-      `📍 ${address}`
-    );
+  const groups: Record<string, UserOrderSummary[]> = {};
+  for (const o of slice) {
+    const dateKey = o.shippingDateIso
+      ? dayjs(o.shippingDateIso).format("DD.MM.YYYY")
+      : "Не визначено";
+    (groups[dateKey] ||= []).push(o);
+  }
+
+  const dateKeys = Object.keys(groups).sort((a, b) => {
+    if (a === "Не визначено" && b !== "Не визначено") return 1;
+    if (b === "Не визначено" && a !== "Не визначено") return -1;
+    const da = dayjs(a, "DD.MM.YYYY");
+    const db = dayjs(b, "DD.MM.YYYY");
+    if (da.isValid() && db.isValid()) return da.valueOf() - db.valueOf();
+    return a.localeCompare(b);
   });
 
-  return `*Мої замовлення*\n\n${lines.join("\n\n")}`;
+  const sections: string[] = [];
+  for (const dateKey of dateKeys) {
+    const header = `*${escapeAllSymbols(dateKey)}*\n──────────────`;
+    const items = groups[dateKey].map((o) => {
+      const timeWindow = o.timeWindow?.trim().length ? o.timeWindow : "Не визначено";
+      const status = escapeAllSymbols(translateStatus(o) || "—");
+      const total = typeof o.grandTotal === "number" ? `${o.grandTotal} грн` : "—";
+      const address = o.address?.trim().length ? escapeAllSymbols(o.address) : "—";
+      return (
+        `*${o.id}*\n` +
+        `Статус: ${status}\n` +
+        `💰 Загальна вартість: ${escapeAllSymbols(total)}\n` +
+        `🕒 ${escapeAllSymbols(timeWindow)}\n` +
+        `📍 ${address}`
+      );
+    });
+    sections.push([header, ...items].join("\n"));
+  }
+
+  return `*Мої замовлення*\n\n${sections.join("\n\n")}`;
 }
 
 type CustomFieldLike = { uuid?: string; name?: string; value?: unknown };
@@ -170,12 +187,10 @@ function buildOrderDetailsText(order: OrderWithAttachments): string {
 
 export async function handleStart(ctx: Context): Promise<void> {
   await ctx.reply(
-    "Привіт! Якщо у вас є username в Telegram — ми спробуємо авторизувати вас автоматично. Інакше поділіться контактом або введіть ваш логін (username) чи номер телефону текстом.",
+    "Привіт! Ви успішно авторизовані у системі.",
     {
       reply_markup: {
-        keyboard: [[{ text: "Поділитися контактом", request_contact: true }]],
-        resize_keyboard: true,
-        one_time_keyboard: true,
+        remove_keyboard: true,
       },
     }
   );
@@ -267,60 +282,78 @@ export function registerOrderHandlers(
   bot.hears(/^(\d+)\s+в\s+(.+)$/i, async (ctx) => handleAddTag(ctx));
 
   bot.on("callback_query:data", async (ctx) => {
-    const data = ctx.callbackQuery.data;
-    if (!data.startsWith("my_orders:")) return;
-    await ctx.answerCallbackQuery();
+    try {
+      const data = ctx.callbackQuery.data;
+      if (!data.startsWith("my_orders:")) return;
+      await ctx.answerCallbackQuery();
 
-    const telegramId = ctx.from?.id;
-    if (!telegramId) return;
-    const state = myOrdersState.get(telegramId);
-    if (!state) return;
+      const telegramId = ctx.from?.id;
+      if (!telegramId) return;
+      const state = myOrdersState.get(telegramId);
+      if (!state) return;
 
-    if (data === "my_orders:noop") return;
+      if (data === "my_orders:noop") return;
 
-    const parts = data.split(":");
-    if (parts[1] === "list") {
-      const page = Number(parts[2] ?? "0") || 0;
-      const text = buildOrdersListText(state.orders, page);
-      const kb = buildOrdersListKeyboard(state.orders, page);
-      try {
-        await ctx.editMessageText(text, { parse_mode: "MarkdownV2", reply_markup: kb });
-      } catch {
-        await ctx.reply(text, { parse_mode: "MarkdownV2", reply_markup: kb });
-      }
-      return;
-    }
-
-    if (parts[1] === "open") {
-      const orderId = Number(parts[2]);
-      const page = Number(parts[3] ?? "0") || 0;
-      if (!orderId) return;
-
-      const order = await getOrderDetails(orderId);
-      if (!order) {
-        await ctx.reply("Не вдалося отримати замовлення. Спробуйте пізніше.");
+      const parts = data.split(":");
+      if (parts[1] === "list") {
+        const page = Number(parts[2] ?? "0") || 0;
+        const text = buildOrdersListText(state.orders, page);
+        const kb = buildOrdersListKeyboard(state.orders, page);
+        try {
+          await ctx.editMessageText(text, {
+            parse_mode: "MarkdownV2",
+            reply_markup: kb,
+          });
+        } catch {
+          await ctx.reply(text, { parse_mode: "MarkdownV2", reply_markup: kb });
+        }
         return;
       }
 
-      const kb = new InlineKeyboard().text("Назад", `my_orders:list:${page}`);
-      const detailsText = buildOrderDetailsText(order as OrderWithAttachments);
-      try {
-        await ctx.editMessageText(detailsText, { parse_mode: "MarkdownV2", reply_markup: kb });
-      } catch {
-        await ctx.reply(detailsText, { parse_mode: "MarkdownV2", reply_markup: kb });
-      }
+      if (parts[1] === "open") {
+        const orderId = Number(parts[2]);
+        const page = Number(parts[3] ?? "0") || 0;
+        if (!orderId) return;
 
-      const attachments = (order as OrderWithAttachments).attachments ?? [];
-      const urls: string[] = attachments
-        .map((a) => a.file?.url)
-        .filter((u): u is string => typeof u === "string" && u.startsWith("http"));
-
-      for (const url of urls.slice(0, 10)) {
-        try {
-          await ctx.replyWithPhoto(url);
-        } catch {
-          // ignore
+        const order = await getOrderDetails(orderId);
+        if (!order) {
+          await ctx.reply("Не вдалося отримати замовлення. Спробуйте пізніше.");
+          return;
         }
+
+        const kb = new InlineKeyboard().text("Назад", `my_orders:list:${page}`);
+        const detailsText = buildOrderDetailsText(order as OrderWithAttachments);
+        try {
+          await ctx.editMessageText(detailsText, {
+            parse_mode: "MarkdownV2",
+            reply_markup: kb,
+          });
+        } catch {
+          await ctx.reply(detailsText, {
+            parse_mode: "MarkdownV2",
+            reply_markup: kb,
+          });
+        }
+
+        const attachments = (order as OrderWithAttachments).attachments ?? [];
+        const urls: string[] = attachments
+          .map((a) => a.file?.url)
+          .filter((u): u is string => typeof u === "string" && u.startsWith("http"));
+
+        for (const url of urls.slice(0, 10)) {
+          try {
+            await ctx.replyWithPhoto(url);
+          } catch {
+            // ignore
+          }
+        }
+      }
+    } catch (error) {
+      console.error("my_orders callback error", error);
+      try {
+        await ctx.answerCallbackQuery({ text: "Помилка. Спробуйте ще раз." });
+      } catch {
+        /* ignore */
       }
     }
   });
