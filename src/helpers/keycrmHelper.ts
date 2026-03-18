@@ -23,9 +23,9 @@ export const fetchAllOrders = async (shippingBetween: string) => {
           limit,
           page: page,
           "filter[shipping_between]": shippingBetween,
-          "filter[status_id]": "2,4,6,7,20,10,8,9,21,23,24",
+          "filter[status_id]": "2,4,6,7,20,10,8,9,21,23,24,25,26,31,30,34,33,32",
           include:
-            "assigned,custom_fields,shipping.deliveryService,buyer,manager,products,tags,payments",
+            "assigned,shipping.lastHistory,manager,shipping.deliveryService,customFields,products,productsCount,products.offer,tags,customFieldsExists,status,buyer",
         },
       });
 
@@ -55,4 +55,40 @@ export const extractBranchNames = (order: AdminOrder) => {
   );
 
   return branchNames.map((tag) => tag.name).join(", ");
+};
+
+export const fetchActiveCrmUsers = async () => {
+  const allUsers: any[] = [];
+  let page = 1;
+  const limit = 50;
+  let hasMore = true;
+
+  try {
+    while (hasMore) {
+      const response = await keycrmApiClient.get("/users", {
+        params: {
+          limit,
+          page,
+          "filter[status]": "active",
+        },
+      });
+
+      const users = response.data.data;
+      allUsers.push(...users);
+
+      if (users.length < limit) {
+        hasMore = false;
+      } else {
+        page++;
+      }
+    }
+
+    return allUsers;
+  } catch (error: any) {
+    console.error(
+      "Getting users error: ",
+      error?.response?.data || error?.message
+    );
+    throw error;
+  }
 };

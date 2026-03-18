@@ -5,7 +5,10 @@
   },
   "347178844": {
     "username": "st_dismas",
-    "addedAt": "2025-01-26T14:42:56.500Z"
+    "added_at": "2026-03-18T10:45:29.706Z",
+    "crmUserId": 3,
+    "isAuthenticated": true,
+    "lastCheckedAt": 1773830729714
   },
   "364467007": {
     "username": "reviant",

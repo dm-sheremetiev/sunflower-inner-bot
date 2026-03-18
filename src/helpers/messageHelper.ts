@@ -66,135 +66,133 @@ const formatOrderMessage = (order: Order) => {
   return finalMessage;
 };
 
-// interface ExtendedOrder extends Order {
-//   exactTime: string;
-// }
-
-const formatMyOrdersMessage = (orders: Order[], username: string) => {
+const formatMyOrdersMessage = (orders: Order[], crmUser: any): string[] => {
   const filteredOrders = orders.filter((order) => {
-    return (
-      order?.manager?.username?.toLowerCase() === username?.toLowerCase() ||
-      order.assigned?.find(
-        (as) => as.username?.toLowerCase() === username?.toLowerCase()
-      )
-    );
+    if (crmUser.crmUserId && order.manager?.id === crmUser.crmUserId) return true;
+    if (crmUser.crmUserId && order.assigned?.some((as) => as.id === crmUser.crmUserId)) return true;
+    
+    // fallback to username
+    const username = crmUser.username?.toLowerCase();
+    if (username) {
+      if (order?.manager?.username?.toLowerCase() === username) return true;
+      if (order.assigned?.some((as) => as.username?.toLowerCase() === username)) return true;
+    }
+    return false;
   });
 
   if (!filteredOrders?.length) {
-    return "Наразі у вас немає активних замовлень";
+    return [];
   }
 
-  const grouped = filteredOrders.reduce<Record<string, Order[]>>(
-    (acc, order) => {
-      // const customFieldTime = order.custom_fields.find(
-      //   (field) => field.uuid === customTimeField
-      // );
-      const fieldDate =
-        order.shipping.shipping_date_actual || dayjs().toString();
+  const groupedByDateAndWindow: Record<string, Record<string, Order[]>> = {};
 
-      const date = dayjs(fieldDate).format("DD-MM-YYYY");
+  filteredOrders.forEach((order) => {
+    const fieldDate = order.shipping.shipping_date_actual || dayjs().toString();
+    const date = dayjs(fieldDate).format("DD-MM-YYYY");
+    
+    const timeWindowField = order.custom_fields?.find(f => f.uuid === "OR_1006" || f.name.toLowerCase().includes("часовий проміжок"));
+    const timeWindow = timeWindowField?.value ? String(timeWindowField.value) : "Не визначено";
 
-      // const timePart = customFieldTime?.value.toLowerCase() || "нема часу";
+    if (!groupedByDateAndWindow[date]) groupedByDateAndWindow[date] = {};
+    if (!groupedByDateAndWindow[date][timeWindow]) groupedByDateAndWindow[date][timeWindow] = [];
+    
+    groupedByDateAndWindow[date][timeWindow].push(order);
+  });
 
-      // const formattedDateTime = dayjs(`${datePart}T$00:00:00.000000Z`)
-      //   .utc()
-      //   .tz("Europe/Kiev")
-      //   .toString();
+  const todayStr = dayjs().format("DD-MM-YYYY");
+  const dates = Object.keys(groupedByDateAndWindow).sort((a, b) => {
+    if (a === todayStr) return -1;
+    if (b === todayStr) return 1;
+    const dateA = dayjs(a, "DD-MM-YYYY");
+    const dateB = dayjs(b, "DD-MM-YYYY");
+    return dateA.valueOf() - dateB.valueOf();
+  });
 
-      // const date = dayjs(formattedDateTime).format("DD-MM-YYYY");
+  const messages: string[] = [];
+  let currentMessage = "";
 
-      if (!acc[date]) {
-        acc[date] = [];
-      }
-      acc[date].push(order);
-      return acc;
-    },
-    {}
-  );
+  const addLine = (line: string) => {
+    if (currentMessage.length + line.length > 3900) {
+      messages.push(currentMessage);
+      currentMessage = "";
+    }
+    currentMessage += line;
+  };
 
-  let message = "";
+  for (const date of dates) {
+    const displayDate = date === todayStr ? `Сьогодні (${date})` : date;
+    addLine(`*${escapeAllSymbols(displayDate)}*\n`);
 
-  Object.keys(grouped)
-    .sort((a, b) => Number(a.split("-")[0]) - Number(b.split("-")[0]))
-    .forEach((date) => {
-      const prettyDate = date;
+    const windows = Object.keys(groupedByDateAndWindow[date]).sort();
+    
+    for (const timeWindow of windows) {
+      addLine(`📌 _${escapeAllSymbols(timeWindow)}_\n`);
 
-      message += `*${prettyDate}*\n`.replaceAll("-", "\\-");
-      grouped[date].forEach((order) => {
-        const productsString = order?.products?.length
-          ? order?.products[0]?.name
-            ? `, назва ${order?.products[0]?.name}, `
-            : ""
+      groupedByDateAndWindow[date][timeWindow].forEach((order) => {
+        let orderText = ``;
+        
+        const productsString = order?.products?.length && order?.products[0]?.name
+          ? `назва: ${order?.products[0]?.name}, `
           : "";
 
-        // Артикул
-        const art = order?.products[0]?.sku
-          ? `арт.: ${order?.products[0]?.sku}, `
-          : "";
-        // Час
-        const timeFieldFlorist = order.custom_fields.find((f) =>
-          f.name.toLowerCase().includes("флор")
-        );
-        const timeForFlorist = timeFieldFlorist
-          ? `час для флористів: ${formatTimeOnly(timeFieldFlorist.value)}, `
-          : "";
-        const timeFieldCourier = order.custom_fields.find((f) =>
-          f.name.toLowerCase().includes("кур")
-        );
-        const timeForCourier = timeFieldCourier
-          ? `час для кур'єрів: ${timeFieldCourier.value}, `
-          : "";
-        // const time = order.exactTime ? `час: ${order.exactTime}` : '';
+        const art = order?.products?.[0]?.sku ? `арт.: ${order?.products[0]?.sku}, ` : "";
 
-        // Адреса
-        const street = order?.shipping?.shipping_receive_point
-          ? order?.shipping?.shipping_receive_point + ", "
-          : "";
-        const secondaryStreet = order?.shipping.shipping_secondary_line
-          ? order?.shipping.shipping_secondary_line + " "
-          : "";
-
-        const city = order?.shipping.shipping_address_city
-          ? order?.shipping.shipping_address_city + ", "
-          : "";
+        const street = order?.shipping?.shipping_receive_point ? order?.shipping?.shipping_receive_point + ", " : "";
+        const secondaryStreet = order?.shipping?.shipping_secondary_line ? order?.shipping?.shipping_secondary_line + " " : "";
+        const city = order?.shipping?.shipping_address_city ? order?.shipping?.shipping_address_city + ", " : "";
         const address = city + street + secondaryStreet;
+        const fullAddress = address.trim().length ? `адреса: ${address.trim()}, ` : "";
 
-        const fullAddress = address.length ? `адреса: ${address}` : "";
-        const giftMessage = order.gift_message
-          ? `, листівка: ${order.gift_message}`
-          : "";
+        const giftMessage = order.gift_message ? `листівка: ${order.gift_message}, ` : "";
+        const comment = order?.buyer_comment ? `коментар: ${order.buyer_comment}, ` : "";
+        const productComment = order.products?.[0]?.comment ? `коментар: ${order.products?.[0]?.comment}, ` : "";
 
-        const comment = order?.buyer_comment
-          ? `, коментар клієнта: ${order.buyer_comment} `
-          : "";
+        let phoneNumber = order.shipping?.recipient_phone || order.buyer?.phone;
+        let number = "";
+        if (phoneNumber) {
+          const escapedPhone = phoneNumber.replaceAll("+", "\\+").replaceAll(".", "");
+          number = order.shipping?.recipient_phone
+            ? `отримувач: \`${escapedPhone}\``
+            : `замовник: \`${escapedPhone}\``;
+        }
 
-        const phoneNumber =
-          order.shipping?.recipient_phone || order.buyer?.phone;
+        let customFieldsText = "";
+        const targetUuids = ["OR_1007", "OR_1011", "OR_1012", "OR_1015", "OR_1017"];
+        const targetNames: Record<string, string> = {
+          "OR_1007": "Район",
+          "OR_1011": "Пробито",
+          "OR_1012": "Листівка перев.",
+          "OR_1015": "Комп.",
+          "OR_1017": "Кульки"
+        };
+        
+        targetUuids.forEach(uuid => {
+          const field = order.custom_fields?.find(f => f.uuid === uuid || f.name.includes(targetNames[uuid]));
+          if (field && field.value) {
+             let valStr = Array.isArray(field.value) ? field.value.join(", ") : String(field.value);
+             if (typeof field.value === "boolean") valStr = field.value ? "Так" : "Ні";
+             customFieldsText += `${targetNames[uuid]}: ${valStr}, `;
+          }
+        });
 
-        const number = phoneNumber
-          ? `, ${
-              order.shipping?.recipient_phone
-                ? `отримувач \\- \`${order.shipping.recipient_phone.replaceAll("+", "\\+").replaceAll(".", "")}\``
-                : `замовник  \\- \`${order.buyer.phone.replaceAll("+", "\\+").replaceAll(".", "")}\``
-            }`
-          : "";
+        const allInfo = `${productsString}${art}${fullAddress}${comment}${giftMessage}${productComment}${customFieldsText}`;
+        const cleanInfo = allInfo.replace(/, $/, "");
 
-        const productComment = order.products?.[0]?.comment
-          ? `, коментар до товару: ${order.products?.[0]?.comment} `
-          : "";
-
-        message +=
-          `№${order.id}` +
-          escapeAllSymbols(
-            `${productsString}${art}${timeForFlorist}${timeForCourier}${fullAddress}${comment}${giftMessage}${productComment}`
-          ) +
-          `${number}\n`;
+        orderText += `№${order.id} \\- ` + escapeAllSymbols(cleanInfo);
+        if (cleanInfo && number) orderText += ", ";
+        if (number) orderText += number;
+        
+        addLine(orderText + `\n\n`);
       });
+    }
+    addLine(`\n`);
+  }
 
-      message += `\n`;
-    });
+  if (currentMessage.trim()) {
+    messages.push(currentMessage);
+  }
 
-  return message;
+  return messages;
 };
 
 export const escapeAllSymbols = (text: string) => {

@@ -1,70 +1,46 @@
-import dayjs from "dayjs";
 import type { Context } from "grammy";
 import { Bot, Api, RawApi, type HearsContext } from "grammy";
-import { fileHelper } from "../../helpers/fileHelper.js";
-import { fetchAllOrders } from "../../helpers/keycrmHelper.js";
-import { messageHelper } from "../../helpers/messageHelper.js";
-import { addTagToOrder } from "../../services/keycrm.service.js";
+import {
+  addTagToOrderInCrm,
+  WAREHOUSE_CHAT_ID,
+} from "../../services/keycrm.service.js";
+import { getUserOrdersFormatted } from "../../services/telegram/orders.service.js";
+import { sendTelegramMessage } from "../../services/telegram/telegramApi.js";
 
 export async function handleStart(ctx: Context): Promise<void> {
-  if (!ctx.from?.username) {
-    await ctx.reply(
-      "Наш бот не бачить твій nickname (ім'я користувача після @). Зміни будь ласка налаштування безпеки та спробуй наново (наново введи команду /start).",
-    );
-    return;
-  }
-
-  const users = fileHelper.loadUsers();
-  const { id: chatId, username } = ctx.from;
-
-  if (users[chatId]) {
-    if (users[chatId].username !== username) {
-      users[chatId].username = username;
-    }
-  } else {
-    users[chatId] = { username, addedAt: new Date().toISOString() };
-  }
-
-  fileHelper.saveUsers(users);
-
   await ctx.reply(
-    `Привіт ${username}. Дякую за реєстрацію. Тут будуть приходити сповіщення про призначене на вас замовлення.`,
+    "Привіт! Якщо у вас є username в Telegram — ми спробуємо авторизувати вас автоматично. Інакше поділіться контактом або введіть ваш логін (username) чи номер телефону текстом.",
+    {
+      reply_markup: {
+        keyboard: [[{ text: "Поділитися контактом", request_contact: true }]],
+        resize_keyboard: true,
+        one_time_keyboard: true,
+      },
+    }
   );
 }
 
 export async function handleMyOrders(ctx: Context): Promise<void> {
-  if (!ctx.from?.username) {
-    await ctx.reply(
-      "Наш бот не бачить твій nickname (ім'я користувача після @). Зміни будь ласка налаштування безпеки та спробуй наново (наново введи команду /start).",
-    );
-    return;
-  }
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
 
-  const users = fileHelper.loadUsers();
-  const { id: chatId, username } = ctx.from;
-
-  if (users[chatId]) {
-    if (users[chatId].username !== username) {
-      users[chatId].username = username;
+  try {
+    const messages = await getUserOrdersFormatted(telegramId);
+    
+    if (!messages || messages.length === 0) {
+      await ctx.reply("Наразі у вас немає активних замовлень");
+      return;
     }
-  } else {
-    users[chatId] = { username, addedAt: new Date().toISOString() };
+    
+    for (const text of messages) {
+      if (text.trim()) {
+        await ctx.reply(text, { parse_mode: "MarkdownV2" });
+      }
+    }
+  } catch (error) {
+    console.error("Orders Handler Error", error);
+    await ctx.reply("Виникла помилка під час обробки. Спробуйте пізніше.");
   }
-
-  fileHelper.saveUsers(users);
-
-  const startOfToday = dayjs().startOf("day").format("YYYY-MM-DD HH:mm:ss");
-  const endOfNextDay = dayjs()
-    .add(5, "day")
-    .endOf("day")
-    .format("YYYY-MM-DD HH:mm:ss");
-  const shippingBetween = `${startOfToday},${endOfNextDay}`;
-
-  const orders = await fetchAllOrders(shippingBetween);
-
-  await ctx.reply(messageHelper.formatMyOrdersMessage(orders, username), {
-    parse_mode: "MarkdownV2",
-  });
 }
 
 export async function handlePrint(ctx: Context): Promise<void> {
@@ -94,7 +70,7 @@ export async function handlePrint(ctx: Context): Promise<void> {
 
 export async function handleAddTag(
   ctx: HearsContext<Context>,
-  bot: Bot<Context, Api<RawApi>>,
+  _bot: Bot<Context, Api<RawApi>>,
 ): Promise<void> {
   try {
     if (!ctx.message?.text) return;
@@ -108,7 +84,13 @@ export async function handleAddTag(
     }
 
     const extraArgument = (ctx.match?.[2] ?? "").trim();
-    await addTagToOrder(ctx, Number(orderId), bot, extraArgument);
+    const result = await addTagToOrderInCrm(Number(orderId), extraArgument);
+
+    await ctx.reply(result.userMessage);
+
+    if (result.success && result.warehouseMessage) {
+      await sendTelegramMessage(WAREHOUSE_CHAT_ID, result.warehouseMessage);
+    }
   } catch (error) {
     console.error("Помилка при обробці запиту:", error);
     await ctx.reply("❌ Виникла помилка. Будь ласка, спробуйте ще раз.");

@@ -1,18 +1,17 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { Context } from "grammy";
 import { Bot, Api, RawApi } from "grammy";
-import { keycrmApiClient } from "../../api/keycrmApiClient.js";
-import { Order } from "../../types/keycrm.js";
 import { fileHelper } from "../../helpers/fileHelper.js";
-import { TelegramUserDatabase } from "../../types/telegram.js";
+import {
+  forwardChatId,
+  deliveryRegex,
+  productDeliveredStatus,
+} from "../../services/telegram/config.js";
 import { changeOrderStatus } from "../../services/keycrm.service.js";
 import {
-  isCourier,
-  forwardChatId,
-  isHoliday,
-  productDeliveredStatus,
-  deliveryRegex,
-} from "./config.js";
+  validateDeliveryVideo,
+  buildDeliveryMessages,
+} from "../../services/telegram/videoPhoto.service.js";
 import {
   cleanupExpiredReportSessions,
   getReportSteps,
@@ -24,7 +23,7 @@ import {
 import {
   sendTelegramMessage,
   sendTelegramMessageToMainAccount,
-} from "./telegramApi.js";
+} from "../../services/telegram/telegramApi.js";
 
 const albumBuffer = new Map<
   string,
@@ -60,29 +59,13 @@ export async function handleVideoMessage(
   if (caption && deliveryRegex.test(caption.trim())) {
     try {
       const orderId = caption.trim().split(" ")[1].trim();
-
-      const res = await keycrmApiClient.get<Order>(
-        `order/${+orderId}?include=manager,assigned`,
+      const validation = await validateDeliveryVideo(
+        orderId,
+        ctx.from!.username,
       );
 
-      if (!res.data) {
-        await ctx.reply(
-          "Такого замовлення не існує, перевірте будь ласка номер замовлення та спробуйте ще раз.",
-        );
-        return;
-      }
-
-      const { data: order } = res;
-
-      if (!isHoliday && !isCourier(ctx.from.username)) {
-        await ctx.reply("Вибачте, цей функціонал доступний тільки кур'єрам.");
-        return;
-      }
-
-      if (!isHoliday && !res.data?.assigned?.length) {
-        await ctx.reply(
-          "На це замовлення спершу треба призначити відповідальних.",
-        );
+      if (!validation.success) {
+        await ctx.reply(validation.userMessage);
         return;
       }
 
@@ -96,52 +79,29 @@ export async function handleVideoMessage(
         changeOrderStatus(orderId, productDeliveredStatus),
       ];
       const results = await Promise.allSettled(promises);
+      const forwardOk = results[0].status === "fulfilled";
+      const statusOk = results[1].status === "fulfilled";
 
-      const managerUsername = order.manager.username;
-      const users = fileHelper.loadUsers();
-      const userEntry = Object.entries(users).find(
-        ([, user]) =>
-          (user as TelegramUserDatabase)?.username === managerUsername,
-      )?.[0];
-
-      let messageForCourier = "";
-      let messageForManager = "";
-
-      const forwardResultError = results[0].status === "rejected";
-      const statusResultError = results[1].status === "rejected";
-
-      if (forwardResultError) {
-        messageForCourier =
-          "Сталася якась помилка при пересилці відео у групу. Спробуйте це зробити власноруч.";
-      } else {
-        messageForCourier =
-          "Дякуємо за вашу роботу. Повідомлення було відправлено у групу.";
-      }
-
-      if (statusResultError) {
-        messageForManager = `Кур'єр доставив замовлення №${orderId}, однак воно не було переведено по статусу далі. Перевірте будь ласка у CRM.`;
-        messageForCourier +=
-          " Статус замовлення не був змінений у системі. Напишіть менеджеру.";
-      } else {
-        messageForManager = `Замовлення №${orderId} було доставлено. Статус замовлення було змінено.`;
-      }
-
+      const { messageForCourier, messageForManager } = buildDeliveryMessages(
+        orderId,
+        forwardOk,
+        statusOk,
+      );
       await ctx.reply(messageForCourier);
 
-      const managerChatId = userEntry;
+      const users = fileHelper.loadUsers();
+      const managerChatId = Object.entries(users).find(
+        ([, user]) =>
+          (user as { username?: string })?.username ===
+          validation.managerUsername,
+      )?.[0];
       if (managerChatId) {
         await sendTelegramMessage(managerChatId, messageForManager);
       } else {
         await sendTelegramMessageToMainAccount(messageForManager);
       }
-    } catch (error: any) {
-      if (error?.status && error?.status === 404) {
-        await ctx.reply(
-          "Такого замовлення не існує, перевірте будь ласка номер замовлення та спробуйте ще раз.",
-        );
-        return;
-      }
-      console.log(error);
+    } catch (error: unknown) {
+      console.error(error);
       await ctx.reply(
         "Сталася якась помилка при пересилці відео у групу. Спробуйте це зробити власноруч.",
       );

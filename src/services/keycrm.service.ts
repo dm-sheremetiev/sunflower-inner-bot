@@ -20,7 +20,6 @@ import {
   sendTelegramMessageToMainAccount,
   sendTelegramMessageToNotificationsChanel,
 } from "./telegram.service.js";
-import { Context, HearsContext, Bot, Api, RawApi } from "grammy";
 import axios from "axios";
 import { StorageUploadResponse } from "../types/keycrm.js";
 
@@ -32,7 +31,9 @@ dayjs.extend(timezone);
 
 const KYIV_TZ = "Europe/Kyiv";
 
-const chatIdWarehouse = "-1002318769632";
+/** ID чату складу для повідомлень про тег "букет на складі" */
+export const WAREHOUSE_CHAT_ID = "-1002318769632";
+const chatIdWarehouse = WAREHOUSE_CHAT_ID;
 const INITIAL_STATUS_ID = "1";
 /** Статус, на який відкатуємо замовлення при невалідній адресі/координатах */
 const ADDRESS_REVERT_STATUS_ID = "31";
@@ -107,7 +108,7 @@ export const sendTelegramMessageAboutOrder = async (
       const { username } = assignee;
 
       const userEntry = Object.entries(users).find(
-        ([, user]) => (user as TelegramUserDatabase).username === username,
+        ([, user]) => (user as any).username === username,
       );
 
       if (userEntry) {
@@ -287,7 +288,7 @@ export const sendMessageAboutPackage = async (
       const { username } = assignee;
 
       const userEntry = Object.entries(users).find(
-        ([, user]) => (user as TelegramUserDatabase).username === username,
+        ([, user]) => (user as any).username === username,
       );
 
       if (userEntry) {
@@ -498,55 +499,52 @@ export const sendMessageAboutWaiting = async (
   }
 };
 
-export const addTagToOrder = async (
-  ctx: HearsContext<Context>,
+export type AddTagToOrderResult =
+  | { success: true; userMessage: string; warehouseMessage: string }
+  | { success: false; userMessage: string };
+
+/** Додає тег "Букет на складі" до замовлення. Не відправляє повідомлення — це робить хендлер. */
+export async function addTagToOrderInCrm(
   orderId: number | string,
-  bot: Bot<Context, Api<RawApi>>,
   extraArgument: string,
-) => {
+): Promise<AddTagToOrderResult> {
+  const successText = `Замовлення ${orderId} успішно змінило свій тег на "БУКЕТ НА СКЛАДІ. Знаходиться: ${extraArgument || "не вказано"}`;
+
   try {
     const orderData = await keycrmApiClient.get<Order>(`order/${+orderId}`, {
       params: { include: "tags" },
     });
 
-    if (!orderData) {
-      ctx.reply(
-        "Такого замовлення не існує у системі. Напишіть адміністратору",
-      );
-
-      return;
+    if (!orderData?.data) {
+      return {
+        success: false,
+        userMessage: "Такого замовлення не існує у системі. Напишіть адміністратору",
+      };
     }
 
     const order = orderData.data;
     const availableTags = order.tags || [];
-
     const tagExists = availableTags.some((tag) =>
       tag.name.toLowerCase().includes("букет на складі"),
     );
 
     if (tagExists) {
-      ctx.reply(
-        `Замовлення ${orderId} успішно змінило свій тег на "БУКЕТ НА СКЛАДІ. Знаходиться: ${extraArgument || "не вказано"}`,
-      );
-
-      await bot.api.sendMessage(
-        chatIdWarehouse,
-        `Замовлення ${orderId} успішно змінило свій тег на "БУКЕТ НА СКЛАДІ. Знаходиться: ${extraArgument || "не вказано"}`,
-      );
-
-      return;
+      return {
+        success: true,
+        userMessage: successText,
+        warehouseMessage: successText,
+      };
     }
 
     const tagsResponse = await keycrmApiClient.get<TagResponse>(`order/tag`, {
       params: { limit: 50 },
     });
 
-    if (!tagsResponse?.data || !Array.isArray(tagsResponse.data.data)) {
-      ctx.reply(
-        "Не вдалося отримати список тегів. Зверніться до адміністратора",
-      );
-
-      return;
+    if (!tagsResponse?.data?.data || !Array.isArray(tagsResponse.data.data)) {
+      return {
+        success: false,
+        userMessage: "Не вдалося отримати список тегів. Зверніться до адміністратора",
+      };
     }
 
     const tags = tagsResponse.data.data;
@@ -554,43 +552,32 @@ export const addTagToOrder = async (
       tag.name.toLowerCase().includes("букет на складі"),
     );
 
-    if (tagToAdd) {
-      availableTags.push(tagToAdd);
-    } else {
-      ctx.reply("Тег не було знайдено. Зверніться до адміністраторів");
-
-      return;
+    if (!tagToAdd) {
+      return {
+        success: false,
+        userMessage: "Тег не було знайдено. Зверніться до адміністраторів",
+      };
     }
 
-    const res = await keycrmApiClient.post<Order>(
+    availableTags.push(tagToAdd);
+    await keycrmApiClient.post<Order>(
       `/order/${+orderId}/tag/${tagToAdd.id}`,
-      {
-        tags: availableTags,
-      },
+      { tags: availableTags },
     );
 
-    try {
-      await bot.api.sendMessage(
-        chatIdWarehouse,
-        `Замовлення ${orderId} успішно змінило свій тег на "БУКЕТ НА СКЛАДІ. Знаходиться: ${extraArgument || "не вказано"}`,
-      );
-
-      ctx.reply(
-        `Замовлення ${orderId} успішно змінило свій тег на "БУКЕТ НА СКЛАДІ. Знаходиться: ${extraArgument || "не вказано"}`,
-      );
-    } catch {
-      ctx.reply(
-        `Замовлення ${orderId} успішно змінило свій тег на "БУКЕТ НА СКЛАДІ але повідомлення не було відправлено у групу`,
-      );
-    }
-
-    return res;
+    return {
+      success: true,
+      userMessage: successText,
+      warehouseMessage: successText,
+    };
   } catch (error) {
-    ctx.reply("Сталася якась помилка. Повідомте адміністраторів");
-
     console.error(error);
+    return {
+      success: false,
+      userMessage: "Сталася якась помилка. Повідомте адміністраторів",
+    };
   }
-};
+}
 
 export const sendMessageAboutNewOrder = async (
   orderId: string | number,
@@ -640,7 +627,7 @@ export const sendMessageAboutNewOrder = async (
       const { username } = assignee;
 
       const userEntry = Object.entries(users).find(
-        ([, user]) => (user as TelegramUserDatabase).username === username,
+        ([, user]) => (user as any).username === username,
       );
 
       if (userEntry) {

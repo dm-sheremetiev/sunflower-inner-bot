@@ -16,6 +16,7 @@ export async function sendTelegramMessage(
         ...(parseMode ? { parse_mode: parseMode } : {}),
       },
     );
+    
     return response.data;
   } catch (error) {
     console.error("Telegram send error:", error);
