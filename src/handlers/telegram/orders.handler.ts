@@ -41,6 +41,7 @@ const PAYMENT_STATUS_TRANSLATIONS: Record<string, string> = {
   paid: "Оплачено",
   overpaid: "Переплачено",
   unpaid: "Не оплачено",
+  part_paid: "Часткова оплата",
 };
 
 function translateStatus(o: UserOrderSummary): string {
@@ -255,8 +256,8 @@ function buildOrderDetailsText(order: OrderWithAttachments): string {
   lines.push(
     `*Замовлення ${order.id}*`,
     `📆 ${escapeAllSymbols(dateStr)}`,
-    `*Статус замовлення:* ${escapeAllSymbols(orderStatus)}`,
     `🕒 Час доставки/самовивозу: ${escapeAllSymbols(timeWindow)}`,
+    `*Статус замовлення:* ${escapeAllSymbols(orderStatus)}`,
   );
 
   if (products) {
@@ -468,6 +469,30 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
         resize_keyboard: true,
       },
     });
+
+    // Відправляємо зображення з attachments, якщо вони є
+    const attachments = (order as OrderWithAttachments).attachments ?? [];
+    const urls: string[] = attachments
+      .map((a) => a.file?.url)
+      .filter((u): u is string => typeof u === "string" && u.startsWith("http"));
+
+    if (urls.length === 1) {
+      try {
+        await ctx.replyWithPhoto(urls[0]);
+      } catch {
+        // ignore
+      }
+    } else if (urls.length > 1) {
+      const media = urls.slice(0, 10).map((url) => ({
+        type: "photo" as const,
+        media: url,
+      }));
+      try {
+        await ctx.api.sendMediaGroup(ctx.chat!.id, media);
+      } catch {
+        // ignore
+      }
+    }
   });
 
   bot.hears(/Оновити замовлення\s+(\d+)$/i, async (ctx) => {
@@ -492,5 +517,28 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
         resize_keyboard: true,
       },
     });
+
+    const attachments = (order as OrderWithAttachments).attachments ?? [];
+    const urls: string[] = attachments
+      .map((a) => a.file?.url)
+      .filter((u): u is string => typeof u === "string" && u.startsWith("http"));
+
+    if (urls.length === 1) {
+      try {
+        await ctx.replyWithPhoto(urls[0]);
+      } catch {
+        // ignore
+      }
+    } else if (urls.length > 1) {
+      const media = urls.slice(0, 10).map((url) => ({
+        type: "photo" as const,
+        media: url,
+      }));
+      try {
+        await ctx.api.sendMediaGroup(ctx.chat!.id, media);
+      } catch {
+        // ignore
+      }
+    }
   });
 }
