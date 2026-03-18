@@ -46,6 +46,7 @@ export function initializeBot(): Bot<Context, Api<RawApi>> {
   });
 
   bot.api.setMyCommands([
+    { command: "order", description: "Перевірити замовлення по ID" },
     { command: "my_orders", description: "Номери моїх замовлення" },
     { command: "report", description: "Відправити звіт (X або Z)" },
   ]);

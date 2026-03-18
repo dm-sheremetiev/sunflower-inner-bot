@@ -21,6 +21,8 @@ const BTN_BACK = "Назад";
 const BTN_PREV_PREFIX = "« Стор.";
 const BTN_NEXT_PREFIX = "Стор. »";
 
+const awaitingOrderId = new Map<number, true>();
+
 const STATUS_TRANSLATIONS: Record<string, string> = {
   new: "Нове замовлення",
   waiting_for_prepayment: "Очікує передоплату",
@@ -394,6 +396,15 @@ export async function handleAddTag(ctx: HearsContext<Context>): Promise<void> {
 export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
   bot.command("start", async (ctx) => handleStart(ctx));
   bot.command("my_orders", async (ctx) => handleMyOrders(ctx));
+  bot.command("order", async (ctx) => {
+    const telegramId = ctx.from?.id;
+    if (!telegramId) return;
+    awaitingOrderId.set(telegramId, true);
+    await ctx.reply(
+      "Введіть номер замовлення (ID).",
+      { reply_markup: { remove_keyboard: true } },
+    );
+  });
   bot.hears(/^друк\s\d+$/i, async (ctx) => handlePrint(ctx));
   bot.hears(/^(\d+)\s+в\s+(.+)$/i, async (ctx) => handleAddTag(ctx));
 
@@ -528,6 +539,72 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
       .filter(
         (u): u is string => typeof u === "string" && u.startsWith("http"),
       );
+
+    if (urls.length === 1) {
+      try {
+        await ctx.replyWithPhoto(urls[0]);
+      } catch {
+        // ignore
+      }
+    } else if (urls.length > 1) {
+      const media = urls.slice(0, 10).map((url) => ({
+        type: "photo" as const,
+        media: url,
+      }));
+      try {
+        await ctx.api.sendMediaGroup(ctx.chat!.id, media);
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  bot.hears(/^\d+$/, async (ctx) => {
+    const telegramId = ctx.from?.id;
+    if (!telegramId) return;
+    if (!awaitingOrderId.has(telegramId)) return;
+
+    const loadingMsg = await ctx.reply("Завантажую…");
+
+    const m = ctx.message?.text?.trim().match(/^(\d+)$/);
+    const orderId = m ? parseInt(m[1], 10) : NaN;
+    if (!orderId) {
+      awaitingOrderId.delete(telegramId);
+      await ctx.reply("Некоректний номер замовлення.");
+      return;
+    }
+
+    awaitingOrderId.delete(telegramId);
+
+    try {
+      if (ctx.chat?.id && loadingMsg.message_id) {
+        await ctx.api.deleteMessage(ctx.chat.id, loadingMsg.message_id);
+      }
+    } catch {
+      // ignore
+    }
+
+    const order = await getOrderDetails(orderId);
+    if (!order) {
+      await ctx.reply("Не вдалося отримати замовлення. Спробуйте пізніше.");
+      return;
+    }
+
+    const detailsText = buildOrderDetailsText(order as OrderWithAttachments);
+    await ctx.reply(detailsText, {
+      parse_mode: "MarkdownV2",
+      reply_markup: {
+        keyboard: [
+          [{ text: BTN_BACK }, { text: `${BTN_REFRESH_ORDER} ${orderId}` }],
+        ],
+        resize_keyboard: true,
+      },
+    });
+
+    const attachments = (order as OrderWithAttachments).attachments ?? [];
+    const urls: string[] = attachments
+      .map((a) => a.file?.url)
+      .filter((u): u is string => typeof u === "string" && u.startsWith("http"));
 
     if (urls.length === 1) {
       try {
