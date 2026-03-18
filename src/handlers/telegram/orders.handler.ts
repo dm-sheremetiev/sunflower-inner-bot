@@ -1,5 +1,5 @@
 import type { Context } from "grammy";
-import { Bot, Api, RawApi, InlineKeyboard, type HearsContext } from "grammy";
+import { Bot, Api, RawApi, type HearsContext } from "grammy";
 import {
   addTagToOrderInCrm,
   WAREHOUSE_CHAT_ID,
@@ -15,7 +15,11 @@ import dayjs from "dayjs";
 import type { Order } from "../../types/keycrm.js";
 
 const PAGE_SIZE = 10;
-const myOrdersState = new Map<number, { orders: UserOrderSummary[] }>();
+const BTN_REFRESH = "🔄 Оновити мої замовлення";
+const BTN_REFRESH_ORDER = "🔄 Оновити замовлення";
+const BTN_BACK = "Назад";
+const BTN_PREV_PREFIX = "« Стор.";
+const BTN_NEXT_PREFIX = "Стор. »";
 
 const STATUS_TRANSLATIONS: Record<string, string> = {
   new: "Нове замовлення",
@@ -33,6 +37,12 @@ const STATUS_TRANSLATIONS: Record<string, string> = {
   delivering: "Доставляється",
 };
 
+const PAYMENT_STATUS_TRANSLATIONS: Record<string, string> = {
+  paid: "Оплачено",
+  overpaid: "Переплачено",
+  unpaid: "Не оплачено",
+};
+
 function translateStatus(o: UserOrderSummary): string {
   const byAlias = o.statusAlias
     ? STATUS_TRANSLATIONS[o.statusAlias]
@@ -43,41 +53,54 @@ function translateStatus(o: UserOrderSummary): string {
   return STATUS_TRANSLATIONS[key] ?? raw ?? "—";
 }
 
+function translatePaymentStatus(raw: string | undefined | null): string {
+  if (!raw) return "—";
+  const key = raw.toLowerCase();
+  return PAYMENT_STATUS_TRANSLATIONS[key] ?? raw;
+}
+
+function translateOrderStatus(alias?: string, name?: string): string {
+  if (alias && STATUS_TRANSLATIONS[alias]) return STATUS_TRANSLATIONS[alias];
+  const raw = (name ?? "").trim();
+  if (!raw) return "—";
+  const key = raw.toLowerCase().replace(/\s+/g, "_");
+  return STATUS_TRANSLATIONS[key] ?? raw;
+}
+
 function formatOrderButtonLabel(order: UserOrderSummary): string {
   const timeWindow = (order.timeWindow?.trim() || "Не визначено").replace(
     /\s+/g,
     " ",
   );
   const label = `${order.id} (${timeWindow})`;
-  // Telegram button text limit is 64 chars
+  // Telegram keyboard button text limit ~64 chars
   return label.length > 64
     ? `${order.id} (${timeWindow.slice(0, 55)}…)`
     : label;
 }
 
-function buildOrdersListKeyboard(
+function buildOrdersReplyKeyboard(
   orders: UserOrderSummary[],
   page: number,
-): InlineKeyboard {
-  const orderIds = orders.map((o) => o.id);
+): { keyboard: Array<Array<{ text: string }>>; resize_keyboard: true } {
   const start = page * PAGE_SIZE;
   const slice = orders.slice(start, start + PAGE_SIZE);
 
-  const kb = new InlineKeyboard();
-  for (const o of slice) {
-    kb.text(formatOrderButtonLabel(o), `my_orders:open:${o.id}:${page}`).row();
+  const keyboard: Array<Array<{ text: string }>> = [];
+  for (const o of slice) keyboard.push([{ text: formatOrderButtonLabel(o) }]);
+
+  const totalPages = Math.max(1, Math.ceil(orders.length / PAGE_SIZE));
+  const navRow: Array<{ text: string }> = [];
+  if (totalPages > 1) {
+    const prevPage = Math.max(0, page - 1);
+    const nextPage = Math.min(totalPages - 1, page + 1);
+    navRow.push({ text: `${BTN_PREV_PREFIX}${prevPage + 1}` });
+    navRow.push({ text: `${BTN_NEXT_PREFIX}${nextPage + 1}` });
   }
+  navRow.push({ text: BTN_REFRESH });
+  if (navRow.length) keyboard.push(navRow);
 
-  const totalPages = Math.max(1, Math.ceil(orderIds.length / PAGE_SIZE));
-  if (totalPages <= 1) return kb;
-
-  const prevPage = Math.max(0, page - 1);
-  const nextPage = Math.min(totalPages - 1, page + 1);
-
-  kb.text("«", `my_orders:list:${prevPage}`);
-  kb.text(`${page + 1}/${totalPages}`, "my_orders:noop");
-  kb.text("»", `my_orders:list:${nextPage}`);
-  return kb;
+  return { keyboard, resize_keyboard: true };
 }
 
 function buildOrdersListText(orders: UserOrderSummary[], page: number): string {
@@ -173,7 +196,7 @@ function buildOrderDetailsText(order: OrderWithAttachments): string {
   const timeWindow = getTimeWindow(order);
 
   const products = (order.products ?? [])
-    .map((p) => `- ${escapeAllSymbols(p.name ?? "—")} x${p.quantity ?? 1}`)
+    .map((p) => `\\- ${escapeAllSymbols(p.name ?? "—")} x${p.quantity ?? 1}`)
     .join("\n");
 
   const managerComment = order.manager_comment
@@ -192,9 +215,25 @@ function buildOrderDetailsText(order: OrderWithAttachments): string {
   const tagXL = (order.tags ?? []).some((t) =>
     /(^|\\s)(XL|XXL)(\\s|$)/i.test(String(t.name ?? "")),
   );
-  const paymentStatus = order.payment_status
-    ? escapeAllSymbols(String(order.payment_status))
-    : "—";
+  const paymentStatus = translatePaymentStatus(order.payment_status);
+  const anyStatus = order.status as unknown as { alias?: string; name?: string } | undefined;
+  const orderStatus = translateOrderStatus(anyStatus?.alias, anyStatus?.name);
+
+  const productsTotal = (order.products ?? []).reduce((sum, p) => {
+    const anyProduct = p as unknown as {
+      price_sold?: number;
+      price?: number;
+      quantity?: number;
+    };
+    const price = Number(anyProduct.price_sold ?? anyProduct.price ?? 0);
+    const qty = Number(anyProduct.quantity ?? 0);
+    return sum + price * qty;
+  }, 0);
+
+  const paidTotal = (order.payments ?? []).reduce((sum, payment) => {
+    const anyPayment = payment as unknown as { amount?: number };
+    return sum + Number(anyPayment.amount ?? 0);
+  }, 0);
 
   const city = order.shipping?.shipping_address_city
     ? `${order.shipping.shipping_address_city}, `
@@ -211,20 +250,61 @@ function buildOrderDetailsText(order: OrderWithAttachments): string {
     .trim();
   const addressText = address ? escapeAllSymbols(address) : "—";
 
-  return (
-    `*Замовлення ${order.id}*\n` +
-    `📆 ${escapeAllSymbols(dateStr)}\n` +
-    `🕒 ${escapeAllSymbols(timeWindow)}\n\n` +
-    `*Товари:*\n${products || "—"}\n\n` +
-    `*Коментар менеджера:*\n${managerComment}\n\n` +
-    `*Коментар клієнта:*\n${clientComment}\n\n` +
-    `*Листівка:* ${giftMessage}\n` +
-    `*Кульки:* ${escapeAllSymbols(String(balloons))}\n` +
-    `*К-сть композицій:* ${escapeAllSymbols(String(compositions))}\n` +
-    `*XL/XXL:* ${tagXL ? "Так" : "Ні"}\n\n` +
-    `*Статус оплати:* ${paymentStatus}\n` +
-    `*Адреса доставки:* ${addressText}`
+  const lines: string[] = [];
+
+  lines.push(
+    `*Замовлення ${order.id}*`,
+    `📆 ${escapeAllSymbols(dateStr)}`,
+    `*Статус замовлення:* ${escapeAllSymbols(orderStatus)}`,
+    `🕒 Час доставки/самовивозу: ${escapeAllSymbols(timeWindow)}`,
   );
+
+  if (products) {
+    lines.push(`\n*Товари:*\n${products}`);
+  }
+
+  if (productsTotal > 0 || paidTotal > 0) {
+    const totalStr = productsTotal.toFixed(2).replace(".", "\\.");
+    const paidStr = paidTotal.toFixed(2).replace(".", "\\.");
+    lines.push(
+      `\n*Сума товарів:* ${totalStr} грн`,
+      `*Сплачено:* ${paidStr} грн`,
+    );
+  }
+
+  if (managerComment !== "—") {
+    lines.push(`\n*Коментар менеджера:*\n${managerComment}`);
+  }
+
+  if (clientComment !== "—") {
+    lines.push(`\n*Коментар клієнта:*\n${clientComment}`);
+  }
+
+  if (giftMessage !== "—") {
+    lines.push(`\n*Листівка:* ${giftMessage}`);
+  }
+
+  if (balloons !== "—") {
+    lines.push(`*Кульки:* ${escapeAllSymbols(String(balloons))}`);
+  }
+
+  if (compositions !== "—") {
+    lines.push(
+      `*Кількість композицій:* ${escapeAllSymbols(String(compositions))}`,
+    );
+  }
+
+  if (tagXL) {
+    lines.push(`*XL/XXL:* Так`);
+  }
+
+  lines.push(`\n*Статус оплати:* ${escapeAllSymbols(paymentStatus)}`);
+
+  if (addressText !== "—") {
+    lines.push(`*Адреса доставки:* ${addressText}`);
+  }
+
+  return lines.join("\n");
 }
 
 export async function handleStart(ctx: Context): Promise<void> {
@@ -246,12 +326,10 @@ export async function handleMyOrders(ctx: Context): Promise<void> {
       return;
     }
 
-    myOrdersState.set(telegramId, { orders: summary });
-
     const page = 0;
     await ctx.reply(buildOrdersListText(summary, page), {
       parse_mode: "MarkdownV2",
-      reply_markup: buildOrdersListKeyboard(summary, page),
+      reply_markup: buildOrdersReplyKeyboard(summary, page),
     });
   } catch (error) {
     console.error("Orders Handler Error", error);
@@ -316,80 +394,103 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
   bot.hears(/^друк\s\d+$/i, async (ctx) => handlePrint(ctx));
   bot.hears(/^(\d+)\s+в\s+(.+)$/i, async (ctx) => handleAddTag(ctx));
 
-  bot.callbackQuery(/^my_orders:open:(\d+):(\d+)$/, async (ctx) => {
-    try {
-      const data = ctx.callbackQuery.data;
-
-      await ctx.answerCallbackQuery("Завантажую…");
-
-      const telegramId = ctx.from?.id;
-
-      if (!telegramId) return;
-      const state = myOrdersState.get(telegramId);
-      if (!state) return;
-
-      if (data === "my_orders:noop") return;
-
-      const parts = data.split(":");
-
-
-      if (parts[1] === "list") {
-        const page = Number(parts[2] ?? "0") || 0;
-        const text = buildOrdersListText(state.orders, page);
-        const kb = buildOrdersListKeyboard(state.orders, page);
-        try {
-          await ctx.editMessageText(text, {
-            parse_mode: "MarkdownV2",
-            reply_markup: kb,
-          });
-        } catch {
-          await ctx.reply(text, { parse_mode: "MarkdownV2", reply_markup: kb });
-        }
-        return;
-      }
-
-      if (parts[1] === "open") {
-        const orderId = Number(parts[2]);
-        const page = Number(parts[3] ?? "0") || 0;
-        if (!orderId) return;
-
-        const order = await getOrderDetails(orderId);
-        if (!order) {
-          await ctx.reply("Не вдалося отримати замовлення. Спробуйте пізніше.");
-          return;
-        }
-
-        const kb = new InlineKeyboard().text("Назад", `my_orders:list:${page}`);
-
-        const detailsText = buildOrderDetailsText(
-          order as OrderWithAttachments,
-        );
-        // Надёжнее прислать отдельным сообщением, чем пытаться редактировать (часто ломается из-за markdown/ограничений)
-        await ctx.reply(detailsText, {
-          parse_mode: "MarkdownV2",
-          reply_markup: kb,
-        });
-
-        // Временно отключаем работу с изображениями (attachments)
-        // const attachments = (order as OrderWithAttachments).attachments ?? [];
-        // const urls: string[] = attachments
-        //   .map((a) => a.file?.url)
-        //   .filter((u): u is string => typeof u === "string" && u.startsWith("http"));
-        // for (const url of urls.slice(0, 10)) {
-        //   try {
-        //     await ctx.replyWithPhoto(url);
-        //   } catch {
-        //     // ignore
-        //   }
-        // }
-      }
-    } catch (error) {
-      console.error("my_orders callback error", error);
-      try {
-        await ctx.answerCallbackQuery({ text: "Помилка. Спробуйте ще раз." });
-      } catch {
-        /* ignore */
-      }
+  const showOrdersPage = async (ctx: Context, page: number) => {
+    const telegramId = ctx.from?.id;
+    if (!telegramId) return;
+    const summary = await getUserOrdersSummary(telegramId);
+    if (!summary || summary.length === 0) {
+      await ctx.reply("Наразі у вас немає активних замовлень", {
+        reply_markup: { remove_keyboard: true },
+      });
+      return;
     }
+    const totalPages = Math.max(1, Math.ceil(summary.length / PAGE_SIZE));
+    const safePage = Math.min(Math.max(0, page), totalPages - 1);
+    await ctx.reply(buildOrdersListText(summary, safePage), {
+      parse_mode: "MarkdownV2",
+      reply_markup: buildOrdersReplyKeyboard(summary, safePage),
+    });
+  };
+
+  const parsePageFromButton = (text: string): number | null => {
+    const mPrev = text.match(/^«\s*Стор\.(\d+)$/);
+    if (mPrev) return Math.max(0, parseInt(mPrev[1], 10) - 1);
+    const mNext = text.match(/^Стор\.\s*»\s*(\d+)$/);
+    if (mNext) return Math.max(0, parseInt(mNext[1], 10) - 1);
+    if (/^🔄\s*Оновити$/i.test(text.trim())) return 0;
+    return null;
+  };
+
+  bot.hears(/^🔄\s*Оновити мої замовлення$/i, async (ctx) => {
+    await showOrdersPage(ctx, 0);
+  });
+  bot.hears(/^«\s*Стор\.\d+$/i, async (ctx) => {
+    const page = parsePageFromButton(ctx.message?.text ?? "") ?? 0;
+    await showOrdersPage(ctx, page);
+  });
+  bot.hears(/^Стор\.\s*»\s*\d+$/i, async (ctx) => {
+    const page = parsePageFromButton(ctx.message?.text ?? "") ?? 0;
+    await showOrdersPage(ctx, page);
+  });
+
+  bot.hears(new RegExp(`^${BTN_BACK}$`, "i"), async (ctx) => {
+    await showOrdersPage(ctx, 0);
+  });
+
+  bot.hears(/^\d+\s*\(.+\)$/, async (ctx) => {
+    const text = ctx.message?.text ?? "";
+    const m = text.match(/^(\d+)/);
+    const orderId = m ? parseInt(m[1], 10) : NaN;
+    if (!orderId) return;
+    const loadingMsg = await ctx.reply("Завантажую…");
+
+    const order = await getOrderDetails(orderId);
+    if (!order) {
+      await ctx.reply("Не вдалося отримати замовлення. Спробуйте пізніше.");
+      return;
+    }
+
+    try {
+      if (ctx.chat?.id && loadingMsg.message_id) {
+        await ctx.api.deleteMessage(ctx.chat.id, loadingMsg.message_id);
+      }
+    } catch {
+      // ignore
+    }
+
+    const detailsText = buildOrderDetailsText(order as OrderWithAttachments);
+    await ctx.reply(detailsText, {
+      parse_mode: "MarkdownV2",
+      reply_markup: {
+        keyboard: [
+          [{ text: BTN_BACK }, { text: `${BTN_REFRESH_ORDER} ${orderId}` }],
+        ],
+        resize_keyboard: true,
+      },
+    });
+  });
+
+  bot.hears(/Оновити замовлення\s+(\d+)$/i, async (ctx) => {
+    const text = ctx.message?.text ?? "";
+    const m = text.match(/(\d+)$/);
+    const orderId = m ? parseInt(m[1], 10) : NaN;
+    if (!orderId) return;
+
+    const order = await getOrderDetails(orderId);
+    if (!order) {
+      await ctx.reply("Не вдалося оновити замовлення. Спробуйте пізніше.");
+      return;
+    }
+
+    const detailsText = buildOrderDetailsText(order as OrderWithAttachments);
+    await ctx.reply(detailsText, {
+      parse_mode: "MarkdownV2",
+      reply_markup: {
+        keyboard: [
+          [{ text: BTN_BACK }, { text: `${BTN_REFRESH_ORDER} ${orderId}` }],
+        ],
+        resize_keyboard: true,
+      },
+    });
   });
 }
