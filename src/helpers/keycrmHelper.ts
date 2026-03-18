@@ -25,7 +25,7 @@ export const fetchAllOrders = async (shippingBetween: string) => {
           "filter[shipping_between]": shippingBetween,
           "filter[status_id]": "2,4,6,7,20,10,8,9,21,23,24,25,26,31,30,34,33,32",
           include:
-            "assigned,shipping.lastHistory,manager,shipping.deliveryService,customFields,products,productsCount,products.offer,tags,customFieldsExists,status,buyer",
+            "assigned,shipping.lastHistory,manager,shipping.deliveryService,customFields,products,productsCount,products.offer,tags,customFieldsExists,status,buyer,attachments,attachments.file",
         },
       });
 

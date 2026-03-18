@@ -123,7 +123,11 @@ const formatMyOrdersMessage = (orders: Order[], crmUser: any): string[] => {
     const displayDate = date === todayStr ? `Сьогодні (${date})` : date;
     addLine(`*${escapeAllSymbols(displayDate)}*\n`);
 
-    const windows = Object.keys(groupedByDateAndWindow[date]).sort();
+    const windows = Object.keys(groupedByDateAndWindow[date]).sort((a, b) => {
+      if (a === "Не визначено" && b !== "Не визначено") return 1;
+      if (b === "Не визначено" && a !== "Не визначено") return -1;
+      return a.localeCompare(b);
+    });
     
     for (const timeWindow of windows) {
       addLine(`📌 _${escapeAllSymbols(timeWindow)}_\n`);
@@ -176,9 +180,9 @@ const formatMyOrdersMessage = (orders: Order[], crmUser: any): string[] => {
         });
 
         const allInfo = `${productsString}${art}${fullAddress}${comment}${giftMessage}${productComment}${customFieldsText}`;
-        const cleanInfo = allInfo.replace(/, $/, "");
+        const cleanInfo = cleanupCommasAndSpaces(allInfo);
 
-        orderText += `№${order.id} \\- ` + escapeAllSymbols(cleanInfo);
+        orderText += `*${order.id}* \\- ` + escapeAllSymbols(cleanInfo);
         if (cleanInfo && number) orderText += ", ";
         if (number) orderText += number;
         
@@ -217,6 +221,16 @@ export const escapeAllSymbols = (text: string) => {
     .replaceAll(".", "\\.")
     .replaceAll("!", "\\!")
     .replaceAll(", ,", ",");
+};
+
+export const cleanupCommasAndSpaces = (text: string): string => {
+  return String(text ?? "")
+    .replace(/\s*,\s*(,\s*)+/g, ", ")
+    .replace(/\s+,/g, ",")
+    .replace(/,\s*\n/g, "\n")
+    .replace(/,\s*$/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 };
 
 export const messageHelper = {
