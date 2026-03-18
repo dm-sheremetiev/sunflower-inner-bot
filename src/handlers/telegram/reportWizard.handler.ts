@@ -127,10 +127,10 @@ export { reportSessions, getReportSteps, cleanupExpiredReportSessions };
 export function registerReportWizard(
   bot: Bot<Context, Api<RawApi>>,
 ): void {
-  bot.on("callback_query", async (ctx) => {
+  bot.on("callback_query", async (ctx, next) => {
     const data = ctx.callbackQuery?.data;
     if (!data?.startsWith("report:") || !ctx.chat?.id || !ctx.from?.username) {
-      return;
+      return next();
     }
     cleanupExpiredReportSessions();
     await ctx.answerCallbackQuery();

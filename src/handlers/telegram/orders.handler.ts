@@ -4,7 +4,11 @@ import {
   addTagToOrderInCrm,
   WAREHOUSE_CHAT_ID,
 } from "../../services/keycrm.service.js";
-import { getOrderDetails, getUserOrdersSummary, type UserOrderSummary } from "../../services/telegram/orders.service.js";
+import {
+  getOrderDetails,
+  getUserOrdersSummary,
+  type UserOrderSummary,
+} from "../../services/telegram/orders.service.js";
 import { sendTelegramMessage } from "../../services/telegram/telegramApi.js";
 import { escapeAllSymbols } from "../../helpers/messageHelper.js";
 import dayjs from "dayjs";
@@ -30,7 +34,9 @@ const STATUS_TRANSLATIONS: Record<string, string> = {
 };
 
 function translateStatus(o: UserOrderSummary): string {
-  const byAlias = o.statusAlias ? STATUS_TRANSLATIONS[o.statusAlias] : undefined;
+  const byAlias = o.statusAlias
+    ? STATUS_TRANSLATIONS[o.statusAlias]
+    : undefined;
   if (byAlias) return byAlias;
   const raw = (o.statusName ?? "").trim();
   const key = raw.toLowerCase().replace(/\s+/g, "_");
@@ -38,10 +44,21 @@ function translateStatus(o: UserOrderSummary): string {
 }
 
 function formatOrderButtonLabel(order: UserOrderSummary): string {
-  return String(order.id);
+  const timeWindow = (order.timeWindow?.trim() || "Не визначено").replace(
+    /\s+/g,
+    " ",
+  );
+  const label = `${order.id} (${timeWindow})`;
+  // Telegram button text limit is 64 chars
+  return label.length > 64
+    ? `${order.id} (${timeWindow.slice(0, 55)}…)`
+    : label;
 }
 
-function buildOrdersListKeyboard(orders: UserOrderSummary[], page: number): InlineKeyboard {
+function buildOrdersListKeyboard(
+  orders: UserOrderSummary[],
+  page: number,
+): InlineKeyboard {
   const orderIds = orders.map((o) => o.id);
   const start = page * PAGE_SIZE;
   const slice = orders.slice(start, start + PAGE_SIZE);
@@ -87,10 +104,15 @@ function buildOrdersListText(orders: UserOrderSummary[], page: number): string {
   for (const dateKey of dateKeys) {
     const header = `*${escapeAllSymbols(dateKey)}*\n──────────────`;
     const items = groups[dateKey].map((o) => {
-      const timeWindow = o.timeWindow?.trim().length ? o.timeWindow : "Не визначено";
+      const timeWindow = o.timeWindow?.trim().length
+        ? o.timeWindow
+        : "Не визначено";
       const status = escapeAllSymbols(translateStatus(o) || "—");
-      const total = typeof o.grandTotal === "number" ? `${o.grandTotal} грн` : "—";
-      const address = o.address?.trim().length ? escapeAllSymbols(o.address) : "—";
+      const total =
+        typeof o.grandTotal === "number" ? `${o.grandTotal} грн` : "—";
+      const address = o.address?.trim().length
+        ? escapeAllSymbols(o.address)
+        : "—";
       return (
         `*${o.id}*\n` +
         `Статус: ${status}\n` +
@@ -143,17 +165,26 @@ type OrderWithAttachments = Order &
   };
 
 function buildOrderDetailsText(order: OrderWithAttachments): string {
-  const dateIso = order.shipping?.shipping_date_actual || order.shipping?.shipping_date;
-  const dateStr = dateIso ? dayjs(dateIso).format("DD.MM.YYYY") : "Не визначено";
+  const dateIso =
+    order.shipping?.shipping_date_actual || order.shipping?.shipping_date;
+  const dateStr = dateIso
+    ? dayjs(dateIso).format("DD.MM.YYYY")
+    : "Не визначено";
   const timeWindow = getTimeWindow(order);
 
   const products = (order.products ?? [])
     .map((p) => `- ${escapeAllSymbols(p.name ?? "—")} x${p.quantity ?? 1}`)
     .join("\n");
 
-  const managerComment = order.manager_comment ? escapeAllSymbols(String(order.manager_comment)) : "—";
-  const clientComment = order.buyer_comment ? escapeAllSymbols(String(order.buyer_comment)) : "—";
-  const giftMessage = order.gift_message ? escapeAllSymbols(String(order.gift_message)) : "—";
+  const managerComment = order.manager_comment
+    ? escapeAllSymbols(String(order.manager_comment))
+    : "—";
+  const clientComment = order.buyer_comment
+    ? escapeAllSymbols(String(order.buyer_comment))
+    : "—";
+  const giftMessage = order.gift_message
+    ? escapeAllSymbols(String(order.gift_message))
+    : "—";
 
   const balloons = getCustomFieldValue(order, "OR_1017", "кульки") ?? "—";
   const compositions = getCustomFieldValue(order, "OR_1015", "комп") ?? "—";
@@ -161,12 +192,23 @@ function buildOrderDetailsText(order: OrderWithAttachments): string {
   const tagXL = (order.tags ?? []).some((t) =>
     /(^|\\s)(XL|XXL)(\\s|$)/i.test(String(t.name ?? "")),
   );
-  const paymentStatus = order.payment_status ? escapeAllSymbols(String(order.payment_status)) : "—";
+  const paymentStatus = order.payment_status
+    ? escapeAllSymbols(String(order.payment_status))
+    : "—";
 
-  const city = order.shipping?.shipping_address_city ? `${order.shipping.shipping_address_city}, ` : "";
-  const street = order.shipping?.shipping_receive_point ? `${order.shipping.shipping_receive_point}, ` : "";
-  const secondary = order.shipping?.shipping_secondary_line ? `${order.shipping.shipping_secondary_line}` : "";
-  const address = `${city}${street}${secondary}`.replace(/,\\s*,/g, ", ").replace(/,\\s*$/, "").trim();
+  const city = order.shipping?.shipping_address_city
+    ? `${order.shipping.shipping_address_city}, `
+    : "";
+  const street = order.shipping?.shipping_receive_point
+    ? `${order.shipping.shipping_receive_point}, `
+    : "";
+  const secondary = order.shipping?.shipping_secondary_line
+    ? `${order.shipping.shipping_secondary_line}`
+    : "";
+  const address = `${city}${street}${secondary}`
+    .replace(/,\\s*,/g, ", ")
+    .replace(/,\\s*$/, "")
+    .trim();
   const addressText = address ? escapeAllSymbols(address) : "—";
 
   return (
@@ -186,14 +228,11 @@ function buildOrderDetailsText(order: OrderWithAttachments): string {
 }
 
 export async function handleStart(ctx: Context): Promise<void> {
-  await ctx.reply(
-    "Привіт! Ви успішно авторизовані у системі.",
-    {
-      reply_markup: {
-        remove_keyboard: true,
-      },
-    }
-  );
+  await ctx.reply("Привіт! Ви успішно авторизовані у системі.", {
+    reply_markup: {
+      remove_keyboard: true,
+    },
+  });
 }
 
 export async function handleMyOrders(ctx: Context): Promise<void> {
@@ -245,9 +284,7 @@ export async function handlePrint(ctx: Context): Promise<void> {
   }
 }
 
-export async function handleAddTag(
-  ctx: HearsContext<Context>,
-): Promise<void> {
+export async function handleAddTag(ctx: HearsContext<Context>): Promise<void> {
   try {
     if (!ctx.message?.text) return;
 
@@ -273,21 +310,20 @@ export async function handleAddTag(
   }
 }
 
-export function registerOrderHandlers(
-  bot: Bot<Context, Api<RawApi>>,
-): void {
+export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
   bot.command("start", async (ctx) => handleStart(ctx));
   bot.command("my_orders", async (ctx) => handleMyOrders(ctx));
   bot.hears(/^друк\s\d+$/i, async (ctx) => handlePrint(ctx));
   bot.hears(/^(\d+)\s+в\s+(.+)$/i, async (ctx) => handleAddTag(ctx));
 
-  bot.on("callback_query:data", async (ctx) => {
+  bot.callbackQuery(/^my_orders:open:(\d+):(\d+)$/, async (ctx) => {
     try {
       const data = ctx.callbackQuery.data;
-      if (!data.startsWith("my_orders:")) return;
-      await ctx.answerCallbackQuery();
+
+      await ctx.answerCallbackQuery("Завантажую…");
 
       const telegramId = ctx.from?.id;
+
       if (!telegramId) return;
       const state = myOrdersState.get(telegramId);
       if (!state) return;
@@ -295,6 +331,8 @@ export function registerOrderHandlers(
       if (data === "my_orders:noop") return;
 
       const parts = data.split(":");
+
+
       if (parts[1] === "list") {
         const page = Number(parts[2] ?? "0") || 0;
         const text = buildOrdersListText(state.orders, page);
@@ -322,31 +360,28 @@ export function registerOrderHandlers(
         }
 
         const kb = new InlineKeyboard().text("Назад", `my_orders:list:${page}`);
-        const detailsText = buildOrderDetailsText(order as OrderWithAttachments);
-        try {
-          await ctx.editMessageText(detailsText, {
-            parse_mode: "MarkdownV2",
-            reply_markup: kb,
-          });
-        } catch {
-          await ctx.reply(detailsText, {
-            parse_mode: "MarkdownV2",
-            reply_markup: kb,
-          });
-        }
 
-        const attachments = (order as OrderWithAttachments).attachments ?? [];
-        const urls: string[] = attachments
-          .map((a) => a.file?.url)
-          .filter((u): u is string => typeof u === "string" && u.startsWith("http"));
+        const detailsText = buildOrderDetailsText(
+          order as OrderWithAttachments,
+        );
+        // Надёжнее прислать отдельным сообщением, чем пытаться редактировать (часто ломается из-за markdown/ограничений)
+        await ctx.reply(detailsText, {
+          parse_mode: "MarkdownV2",
+          reply_markup: kb,
+        });
 
-        for (const url of urls.slice(0, 10)) {
-          try {
-            await ctx.replyWithPhoto(url);
-          } catch {
-            // ignore
-          }
-        }
+        // Временно отключаем работу с изображениями (attachments)
+        // const attachments = (order as OrderWithAttachments).attachments ?? [];
+        // const urls: string[] = attachments
+        //   .map((a) => a.file?.url)
+        //   .filter((u): u is string => typeof u === "string" && u.startsWith("http"));
+        // for (const url of urls.slice(0, 10)) {
+        //   try {
+        //     await ctx.replyWithPhoto(url);
+        //   } catch {
+        //     // ignore
+        //   }
+        // }
       }
     } catch (error) {
       console.error("my_orders callback error", error);

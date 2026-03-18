@@ -12,6 +12,15 @@ export const authMiddleware = async (
   const chatId = ctx.from?.id;
   if (!chatId) return next();
 
+  const safeAnswerCallback = async (text: string) => {
+    if (!ctx.callbackQuery) return;
+    try {
+      await ctx.answerCallbackQuery({ text });
+    } catch {
+      // ignore
+    }
+  };
+
   const { isAuth, user } = isUserAuthenticated(chatId);
   const isStartCommand = !!ctx.message?.text?.startsWith("/start");
 
@@ -41,6 +50,7 @@ export const authMiddleware = async (
           { reply_markup: { remove_keyboard: true } },
         );
       }
+      await safeAnswerCallback("Потрібна авторизація");
       return;
     }
 
@@ -61,12 +71,14 @@ export const authMiddleware = async (
       await ctx.reply(result.message, {
         reply_markup: { remove_keyboard: true },
       });
+      await safeAnswerCallback("Готово");
       // Якщо це /start — дати пройти хендлеру, щоб він показав наступні дії.
       if (isStartCommand) return next();
       // Якщо це ввід логіну/телефону — не проганяємо далі як команду.
       return;
     } else {
       await ctx.reply(result.message, { reply_markup: { remove_keyboard: true } });
+      await safeAnswerCallback("Доступ не надано");
       return;
     }
   }
@@ -75,6 +87,7 @@ export const authMiddleware = async (
   const verification = await verifyUserAccess(chatId);
   if (!verification.isValid) {
       await ctx.reply("Термін перевірки минув або доступ відхилено.", { reply_markup: { remove_keyboard: true } });
+      await safeAnswerCallback("Доступ відхилено");
       return;
   }
 
