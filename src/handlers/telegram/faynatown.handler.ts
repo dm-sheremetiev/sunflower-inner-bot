@@ -54,6 +54,8 @@ export function registerFaynatownHandlers(
   bot.hears(/перепустки\s+авто/i, async (ctx) => {
     const text = ctx.message?.text?.trim() ?? "";
     try {
+      await ctx.reply("Завантажується...🕒");
+
       const configError = getFaynatownConfigError();
       if (configError) {
         await ctx.reply(configError);
@@ -88,6 +90,8 @@ export function registerFaynatownHandlers(
   bot.hears(/перепустки/i, async (ctx) => {
     const text = ctx.message?.text?.trim() ?? "";
     try {
+      await ctx.reply("Завантажується...🕒");
+
       const configError = getFaynatownConfigError();
       if (configError) {
         await ctx.reply(configError);
@@ -122,6 +126,7 @@ export function registerFaynatownHandlers(
   });
 
   bot.hears(/нова\s+перепустка\s+авто/i, async (ctx) => {
+    await ctx.reply("Завантажується...🕒");
     const text = ctx.message?.text?.trim() ?? "";
     try {
       const configError = getFaynatownConfigError();
@@ -171,6 +176,8 @@ export function registerFaynatownHandlers(
   bot.hears(/нова\s+перепустка/i, async (ctx) => {
     const text = ctx.message?.text?.trim() ?? "";
     try {
+      await ctx.reply("Завантажується...🕒");
+
       const configError = getFaynatownConfigError();
       if (configError) {
         await ctx.reply(configError);

@@ -1037,9 +1037,6 @@ export const sendUploadedImageToCustomerChat = async (
     );
     const conversationId = latest.id;
 
-    const assignedPeople = order?.assigned?.map((as) => as.full_name)?.join(",") ?? "";
-    const assignedText = `${assignedPeople?.length ? ` Відповідальні ${assignedPeople}` : ""}`;
-
     const text =
       attachmentIndex === 0
         ? "Надсилаємо фото збірки без пакування на затвердження✨"

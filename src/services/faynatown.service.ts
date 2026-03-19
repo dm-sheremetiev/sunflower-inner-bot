@@ -274,11 +274,70 @@ export const getLatestPassesWithQr = async (
   return out;
 };
 
-/** resident_id за complexId з FAYNATOWN_HIKVISION_STATUSES */
-function getResidentIdByComplexId(complexId: number): string | null {
+/** resident_id з .env за complexId */
+function getResidentIdByComplexIdFromEnv(complexId: number): string | null {
   const statuses = defaultHikVisionStatuses();
   const s = statuses.find((x) => x.ComplexId === complexId);
   return s?.HikvisionId ?? null;
+}
+
+const residentIdCache = new Map<number, string>();
+
+/**
+ * Шукає актуальний resident_id у недавніх проходках комплексу.
+ * Якщо не знайдено — повертає значення з .env.
+ */
+async function resolveResidentIdByComplexId(complexId: number): Promise<string | null> {
+  const cached = residentIdCache.get(complexId);
+  if (cached) return cached;
+
+  const statuses = defaultHikVisionStatuses();
+  if (statuses.length > 0) {
+    try {
+      const visitorPasses = await getPassHistory({
+        HikVisionStatuses: statuses,
+        PassType: 2,
+        Offset: 0,
+        Limit: 100,
+        Filter: null,
+      });
+      const carPasses = await getPassHistory({
+        HikVisionStatuses: statuses,
+        PassType: 1,
+        Offset: 0,
+        Limit: 100,
+        Filter: null,
+      });
+      const list = [...visitorPasses, ...carPasses];
+
+      const recent = [...list]
+        .filter((p) => p.complexId === complexId && typeof p.residentId === "string" && p.residentId.trim().length > 0)
+        .sort((a, b) => {
+          const createdA = a.created_at ? new Date(a.created_at).getTime() : NaN;
+          const createdB = b.created_at ? new Date(b.created_at).getTime() : NaN;
+          if (!Number.isNaN(createdA) && !Number.isNaN(createdB)) return createdB - createdA;
+          const tA = new Date(a.startTime).getTime();
+          const tB = new Date(b.startTime).getTime();
+          return tB - tA;
+        });
+
+      const residentIdFromHistory = recent[0]?.residentId?.trim();
+      if (residentIdFromHistory) {
+        residentIdCache.set(complexId, residentIdFromHistory);
+        return residentIdFromHistory;
+      }
+    } catch {
+      // Якщо історія недоступна, використовуємо fallback з .env.
+    }
+  }
+
+  const residentIdFromEnv = getResidentIdByComplexIdFromEnv(complexId);
+  if (residentIdFromEnv) {
+    residentIdCache.set(complexId, residentIdFromEnv);
+    return residentIdFromEnv;
+  }
+
+  return null;
 }
 
 /** PassType для авто-перепусток */
@@ -361,7 +420,7 @@ export const createCarPass = async (
   complexId: number,
   plateNo: string
 ): Promise<boolean> => {
-  const residentId = getResidentIdByComplexId(complexId);
+  const residentId = await resolveResidentIdByComplexId(complexId);
   if (!residentId) {
     throw new Error(`Немає resident_id для complexId ${complexId} у FAYNATOWN_HIKVISION_STATUSES`);
   }
@@ -376,7 +435,7 @@ export const createVisitorPasses = async (
   complexId: number,
   count: number
 ): Promise<unknown[]> => {
-  const residentId = getResidentIdByComplexId(complexId);
+  const residentId = await resolveResidentIdByComplexId(complexId);
   if (!residentId) {
     throw new Error(`Немає resident_id для complexId ${complexId} у FAYNATOWN_HIKVISION_STATUSES`);
   }

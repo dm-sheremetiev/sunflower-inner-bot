@@ -93,6 +93,35 @@ faynatownApiClient.interceptors.request.use(
 );
 
 faynatownApiClient.interceptors.response.use(undefined, async (error) => {
+  const responseErrorMessage =
+    typeof error.response?.data?.error === "string"
+      ? error.response.data.error
+      : "";
+  const shouldReLoginByIdentityMismatch =
+    error.response?.status === 400 &&
+    phoneNumber &&
+    password &&
+    responseErrorMessage.includes(
+      "Ідентифікаційні дані користувача не співпадають з даними СКД."
+    );
+
+  const originalConfig = error.config as
+    | (InternalAxiosRequestConfig & { __faynatownReloginRetry?: boolean })
+    | undefined;
+
+  if (
+    shouldReLoginByIdentityMismatch &&
+    originalConfig &&
+    !originalConfig.__faynatownReloginRetry
+  ) {
+    clearToken();
+    const token = await fetchToken();
+    cachedToken = token;
+    originalConfig.__faynatownReloginRetry = true;
+    originalConfig.headers.Authorization = `Bearer ${token}`;
+    return faynatownApiClient.request(originalConfig);
+  }
+
   if (error.response?.status === 401 && phoneNumber && password) {
     clearToken();
     const token = await fetchToken();
