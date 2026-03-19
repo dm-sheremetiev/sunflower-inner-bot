@@ -54,8 +54,8 @@ export function initializeBot(): Bot<Context, Api<RawApi>> {
   bot.use(authMiddleware);
 
   registerReportWizard(bot);
-  registerVideoPhotoHandlers(bot);
   registerOrderHandlers(bot);
+  registerVideoPhotoHandlers(bot);
   registerFaynatownHandlers(bot);
   registerStudioHandler(bot);
 

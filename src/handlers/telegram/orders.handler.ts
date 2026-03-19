@@ -2,6 +2,8 @@ import type { Context } from "grammy";
 import { Bot, Api, RawApi, type HearsContext } from "grammy";
 import {
   addTagToOrderInCrm,
+  changeOrderStatus,
+  sendUploadedImageToCustomerChat,
   WAREHOUSE_CHAT_ID,
 } from "../../services/keycrm.service.js";
 import {
@@ -16,12 +18,74 @@ import type { Order } from "../../types/keycrm.js";
 
 const PAGE_SIZE = 10;
 const BTN_REFRESH = "🔄 Оновити мої замовлення";
-const BTN_REFRESH_ORDER = "🔄 Оновити замовлення";
 const BTN_BACK = "Назад";
 const BTN_PREV_PREFIX = "« Стор.";
 const BTN_NEXT_PREFIX = "Стор. »";
 
 const awaitingOrderId = new Map<number, true>();
+
+type CompositionAttachmentIndex = 0 | 1;
+
+type CompositionPhotoSession = {
+  orderId: number;
+  attachmentIndex: CompositionAttachmentIndex;
+  photoFileId?: string;
+  createdAt: number;
+};
+
+const awaitingCompositionPhoto = new Map<string, CompositionPhotoSession>();
+
+const COMPOSITION_PHOTO_SESSION_TTL_MS = 10 * 60 * 1000;
+
+const COMPOSITION_BARE_STATUS_ID =
+  process?.env?.COMPOSITION_BARE_STATUS_ID ?? "24";
+const COMPOSITION_PACKED_STATUS_ID =
+  process?.env?.COMPOSITION_PACKED_STATUS_ID ?? "26";
+
+const COMP_PHOTO_ATTACH_PREFIX = "comp:attach:";
+const COMP_PHOTO_CONFIRM_PREFIX = "comp:confirm:";
+const COMP_PHOTO_CANCEL_PREFIX = "comp:cancel:";
+
+function buildCompositionAttachInlineKeyboard(orderId: number) {
+  return {
+    inline_keyboard: [
+      [
+        {
+          text: "Прикріпити фото збірки",
+          callback_data: `${COMP_PHOTO_ATTACH_PREFIX}0:${orderId}`,
+        },
+      ],
+      [
+        {
+          text: "Прикріпити фото з пакуванням",
+          callback_data: `${COMP_PHOTO_ATTACH_PREFIX}1:${orderId}`,
+        },
+      ],
+    ],
+  };
+}
+
+function buildCompositionConfirmInlineKeyboard(
+  attachmentIndex: CompositionAttachmentIndex,
+  orderId: number,
+) {
+  return {
+    inline_keyboard: [
+      [
+        {
+          text: "Надіслати це фото та змінити статус",
+          callback_data: `${COMP_PHOTO_CONFIRM_PREFIX}${attachmentIndex}:${orderId}`,
+        },
+      ],
+      [
+        {
+          text: "Відміна",
+          callback_data: `${COMP_PHOTO_CANCEL_PREFIX}${attachmentIndex}:${orderId}`,
+        },
+      ],
+    ],
+  };
+}
 
 const STATUS_TRANSLATIONS: Record<string, string> = {
   new: "Нове замовлення",
@@ -42,6 +106,7 @@ const STATUS_TRANSLATIONS: Record<string, string> = {
 const PAYMENT_STATUS_TRANSLATIONS: Record<string, string> = {
   paid: "Оплачено",
   overpaid: "Переплачено",
+  not_paid: "Не оплачено",
   unpaid: "Не оплачено",
   part_paid: "Часткова оплата",
 };
@@ -408,6 +473,178 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
   bot.hears(/^друк\s\d+$/i, async (ctx) => handlePrint(ctx));
   bot.hears(/^(\d+)\s+в\s+(.+)$/i, async (ctx) => handleAddTag(ctx));
 
+  bot.on("callback_query", async (ctx, next) => {
+    try {
+      const data = ctx.callbackQuery?.data;
+      if (!data || !ctx.chat?.id) return next();
+
+      const chatId = String(ctx.chat.id);
+
+      if (data.startsWith(COMP_PHOTO_ATTACH_PREFIX)) {
+        const rest = data.slice(COMP_PHOTO_ATTACH_PREFIX.length);
+        const [attachmentIndexRaw, orderIdRaw] = rest.split(":");
+        const attachmentIndex = Number(attachmentIndexRaw) as CompositionAttachmentIndex;
+        const orderId = Number(orderIdRaw);
+
+        if (
+          (attachmentIndex !== 0 && attachmentIndex !== 1) ||
+          Number.isNaN(orderId) ||
+          orderId <= 0
+        ) {
+          await ctx.answerCallbackQuery({ text: "Невірні параметри." });
+          return;
+        }
+
+        awaitingCompositionPhoto.set(chatId, {
+          orderId,
+          attachmentIndex,
+          photoFileId: undefined,
+          createdAt: Date.now(),
+        });
+
+        await ctx.answerCallbackQuery();
+        await ctx.reply(
+          "Надішліть фото одним повідомленням. Якщо фото буде кілька — візьмемо перше.",
+        );
+        return;
+      }
+
+      if (data.startsWith(COMP_PHOTO_CANCEL_PREFIX)) {
+        const rest = data.slice(COMP_PHOTO_CANCEL_PREFIX.length);
+        const [attachmentIndexRaw, orderIdRaw] = rest.split(":");
+        const attachmentIndex = Number(attachmentIndexRaw) as CompositionAttachmentIndex;
+        const orderId = Number(orderIdRaw);
+
+        if (
+          (attachmentIndex !== 0 && attachmentIndex !== 1) ||
+          Number.isNaN(orderId) ||
+          orderId <= 0
+        ) {
+          await ctx.answerCallbackQuery({ text: "Невірні параметри." });
+          return;
+        }
+
+        const session = awaitingCompositionPhoto.get(chatId);
+        if (
+          !session ||
+          session.orderId !== orderId ||
+          session.attachmentIndex !== attachmentIndex
+        ) {
+          await ctx.answerCallbackQuery({
+            text: "Сесію не знайдено або вона застаріла. Почніть заново.",
+          });
+          return;
+        }
+
+        awaitingCompositionPhoto.delete(chatId);
+        await ctx.answerCallbackQuery();
+        await ctx.reply("Скасовано.");
+        return;
+      }
+
+      if (data.startsWith(COMP_PHOTO_CONFIRM_PREFIX)) {
+        const rest = data.slice(COMP_PHOTO_CONFIRM_PREFIX.length);
+        const [attachmentIndexRaw, orderIdRaw] = rest.split(":");
+        const attachmentIndex = Number(attachmentIndexRaw) as CompositionAttachmentIndex;
+        const orderId = Number(orderIdRaw);
+
+        if (
+          (attachmentIndex !== 0 && attachmentIndex !== 1) ||
+          Number.isNaN(orderId) ||
+          orderId <= 0
+        ) {
+          await ctx.answerCallbackQuery({ text: "Невірні параметри." });
+          return;
+        }
+
+        const session = awaitingCompositionPhoto.get(chatId);
+        if (
+          !session ||
+          session.orderId !== orderId ||
+          session.attachmentIndex !== attachmentIndex
+        ) {
+          await ctx.answerCallbackQuery({
+            text: "Сесію не знайдено або вона застаріла. Почніть заново.",
+          });
+          return;
+        }
+
+        if (Date.now() - session.createdAt > COMPOSITION_PHOTO_SESSION_TTL_MS) {
+          awaitingCompositionPhoto.delete(chatId);
+          await ctx.answerCallbackQuery({
+            text: "Сесію не знайдено або вона застаріла. Почніть заново.",
+          });
+          return;
+        }
+
+        if (!session.photoFileId) {
+          await ctx.answerCallbackQuery({
+            text: "Спочатку надішліть фото.",
+          });
+          return;
+        }
+
+        await ctx.answerCallbackQuery();
+
+        const statusId =
+          attachmentIndex === 0
+            ? COMPOSITION_BARE_STATUS_ID
+            : COMPOSITION_PACKED_STATUS_ID;
+
+        const loadingMsg = await ctx.reply("Завантажується...");
+
+        try {
+          // Download photo binary from Telegram
+          const tgFile = await ctx.api.getFile(session.photoFileId);
+          const filePath = tgFile?.file_path;
+          if (!filePath) throw new Error("Telegram file_path is empty.");
+
+          const telegramToken = process?.env?.TELEGRAM_BOT_TOKEN || "";
+          const downloadUrl = `https://api.telegram.org/file/bot${telegramToken}/${filePath}`;
+
+          // Change order status first
+          await changeOrderStatus(orderId, statusId);
+
+          // Send uploaded image to client chat
+          const fileName = filePath.split("/").pop() || `photo-${orderId}.jpg`;
+          await sendUploadedImageToCustomerChat(
+            orderId,
+            attachmentIndex,
+            downloadUrl,
+            fileName,
+          );
+
+          awaitingCompositionPhoto.delete(chatId);
+
+          // Replace loading message with success message
+          try {
+            await ctx.api.editMessageText(chatId, loadingMsg.message_id, "Готово! Фото надіслано клієнту, статус замовлення змінено.");
+          } catch {
+            await ctx.reply(
+              "Готово! Фото надіслано клієнту, статус замовлення змінено.",
+            );
+          }
+        } catch (e) {
+          awaitingCompositionPhoto.delete(chatId);
+          try {
+            await ctx.api.editMessageText(chatId, loadingMsg.message_id, "Сталася помилка. Спробуйте ще раз.");
+          } catch {
+            await ctx.reply("Сталася помилка. Спробуйте ще раз.");
+          }
+          throw e;
+        }
+
+        return;
+      }
+    } catch (err) {
+      console.error("Composition photo callback error:", err);
+      await ctx.reply("Сталася помилка. Спробуйте ще раз.");
+      return;
+    }
+
+    return next();
+  });
+
   const showOrdersPage = async (ctx: Context, page: number) => {
     const telegramId = ctx.from?.id;
     if (!telegramId) return;
@@ -473,14 +710,9 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
     }
 
     const detailsText = buildOrderDetailsText(order as OrderWithAttachments);
-    await ctx.reply(detailsText, {
+    await ctx.reply(`${detailsText}\n\nОберіть, яке фото прикріпити:`, {
       parse_mode: "MarkdownV2",
-      reply_markup: {
-        keyboard: [
-          [{ text: BTN_BACK }, { text: `${BTN_REFRESH_ORDER} ${orderId}` }],
-        ],
-        resize_keyboard: true,
-      },
+      reply_markup: buildCompositionAttachInlineKeyboard(orderId),
     });
 
     // Відправляємо зображення з attachments, якщо вони є
@@ -523,14 +755,9 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
     }
 
     const detailsText = buildOrderDetailsText(order as OrderWithAttachments);
-    await ctx.reply(detailsText, {
+    await ctx.reply(`${detailsText}\n\nОберіть, яке фото прикріпити:`, {
       parse_mode: "MarkdownV2",
-      reply_markup: {
-        keyboard: [
-          [{ text: BTN_BACK }, { text: `${BTN_REFRESH_ORDER} ${orderId}` }],
-        ],
-        resize_keyboard: true,
-      },
+      reply_markup: buildCompositionAttachInlineKeyboard(orderId),
     });
 
     const attachments = (order as OrderWithAttachments).attachments ?? [];
@@ -591,14 +818,9 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
     }
 
     const detailsText = buildOrderDetailsText(order as OrderWithAttachments);
-    await ctx.reply(detailsText, {
+    await ctx.reply(`${detailsText}\n\nОберіть, яке фото прикріпити:`, {
       parse_mode: "MarkdownV2",
-      reply_markup: {
-        keyboard: [
-          [{ text: BTN_BACK }, { text: `${BTN_REFRESH_ORDER} ${orderId}` }],
-        ],
-        resize_keyboard: true,
-      },
+      reply_markup: buildCompositionAttachInlineKeyboard(orderId),
     });
 
     const attachments = (order as OrderWithAttachments).attachments ?? [];
@@ -622,6 +844,43 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
       } catch {
         // ignore
       }
+    }
+  });
+
+  // Composition/packing photo flow (inline keyboard → photo → confirm)
+  bot.on("message:photo", async (ctx, next) => {
+    try {
+      const chatId = ctx.chat?.id;
+      if (!chatId) return next();
+
+      const session = awaitingCompositionPhoto.get(String(chatId));
+      if (!session) return next();
+
+      if (Date.now() - session.createdAt > COMPOSITION_PHOTO_SESSION_TTL_MS) {
+        awaitingCompositionPhoto.delete(String(chatId));
+        await ctx.reply("Сесія застаріла. Почніть заново.");
+        return next();
+      }
+
+      // If user already sent one photo — ignore any further photos.
+      if (session.photoFileId) return;
+
+      const photoSizes = ctx.message?.photo;
+      if (!photoSizes?.length) return next();
+
+      // "Беремо першу": this handler is invoked for each message, so first photo message wins.
+      const fileId = photoSizes[photoSizes.length - 1].file_id;
+      session.photoFileId = fileId;
+
+      await ctx.reply("Фото отримано. Підтвердьте дію:", {
+        reply_markup: buildCompositionConfirmInlineKeyboard(
+          session.attachmentIndex,
+          session.orderId,
+        ),
+      });
+    } catch (err) {
+      console.error("Composition photo handler error:", err);
+      await ctx.reply("Сталася помилка з фото. Спробуйте ще раз.");
     }
   });
 }

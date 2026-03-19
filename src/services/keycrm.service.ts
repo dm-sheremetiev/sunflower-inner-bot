@@ -904,6 +904,205 @@ export const sendImageToCustomerChat = async (
 };
 
 /**
+ * Uploads already downloaded binary buffer to KeyCRM storage.
+ * Used by Telegram flow where we download photo from Telegram and then upload to `/storage/upload`.
+ */
+export const uploadBufferToKeycrmStorage = async (
+  buffer: Buffer,
+  fileName: string,
+  contentType?: string,
+): Promise<StorageUploadResponse> => {
+  const FormData = (await import("form-data")).default;
+  const form = new FormData();
+
+  form.append("file", buffer, {
+    filename: fileName || "image.jpg",
+    contentType: contentType || "image/jpeg",
+  });
+
+  const uploadResponse = await keycrmApiClient.post<StorageUploadResponse>(
+    "/storage/upload",
+    form,
+    {
+      headers: {
+        ...form.getHeaders(),
+      },
+      timeout: 60000, // 60 seconds timeout for upload
+    },
+  );
+
+  if (!uploadResponse.data?.url) {
+    throw new Error("Upload response does not contain file URL");
+  }
+
+  return uploadResponse.data;
+};
+
+/**
+ * Sends a composition/packing photo to the latest client conversation.
+ * Unlike `sendImageToCustomerChat`, this function sends an explicit file URL
+ * (so Telegram flow doesn't need to attach file to order first).
+ */
+export const sendUploadedImageToCustomerChat = async (
+  orderId: number | string,
+  attachmentIndex: 0 | 1,
+  uploadedFileUrl: string,
+  uploadedFileName?: string,
+) => {
+  try {
+    // Ensure orderId is a number and convert to string for URL
+    const normalizedOrderId = Number(orderId);
+    if (isNaN(normalizedOrderId)) {
+      throw new Error(`Невірний номер замовлення: ${orderId}`);
+    }
+
+    // Get order info (including shipping, client, tags)
+    const { data: order } = await keycrmAdminApiClient.get<AdminOrder>(
+      `/orders/${normalizedOrderId}`,
+    );
+
+    if (!order) {
+      throw new Error(
+        `Не було знайдено замовлення із №${normalizedOrderId}.`,
+      );
+    }
+
+    if (
+      order?.tags?.find((tag) =>
+        (tag?.name ?? "").toLowerCase().includes("блогер"),
+      )
+    ) {
+      throw new Error(
+        `Замовлення №${normalizedOrderId} для блогера, фото не відправляємо.`,
+      );
+    }
+
+    if (
+      order?.tags?.find((tag) =>
+        (tag?.name ?? "").toLowerCase().includes("скарга"),
+      )
+    ) {
+      throw new Error(
+        `Замовлення №${normalizedOrderId} має тег "скарга", фото не відправляємо.`,
+      );
+    }
+
+    const branchNames = extractBranchNames(order);
+
+    // Keep the same "today/tomorrow" rule as existing `sendImageToCustomerChat`
+    const shippingDateStr = order.shipping?.shipping_date_actual;
+    if (!shippingDateStr) {
+      const msg =
+        `${branchNames?.length ? `${branchNames}. ` : ""}` +
+        `Замовлення №${normalizedOrderId}. Фото не було відправлено: не вказано дату відправки. Надішліть фото вручну.`;
+      await sendTelegramMessage(photoApprovalChatId, msg).catch(() => null);
+      return;
+    }
+
+    const todayKyiv = dayjs().tz(KYIV_TZ).startOf("day");
+    const tomorrowKyiv = todayKyiv.add(1, "day");
+    const deliveryDayKyiv = dayjs(shippingDateStr).tz(KYIV_TZ).startOf("day");
+    const isDeliveryTodayOrTomorrow =
+      deliveryDayKyiv.isSame(todayKyiv) || deliveryDayKyiv.isSame(tomorrowKyiv);
+
+    if (!isDeliveryTodayOrTomorrow) {
+      const deliveryFormatted = deliveryDayKyiv.format("DD.MM.YYYY");
+      const msg =
+        `${branchNames?.length ? `${branchNames}. ` : ""}` +
+        `Замовлення №${normalizedOrderId}. Фото не було відправлено: дата відправки ${deliveryFormatted} — це не сьогодні і не завтра (за київським часом). Надішліть фото вручну.`;
+      await sendTelegramMessage(photoApprovalChatId, msg).catch(() => null);
+      return;
+    }
+
+    const clientId = order.client_id;
+    if (!clientId) {
+      throw new Error(
+        `Замовлення №${normalizedOrderId}. Не знайдено client_id для відправки фото.`,
+      );
+    }
+
+    const conversationsRes = await keycrmAdminApiClient.get<Conversation[]>(
+      `/conversations/by-client/${clientId}`,
+    );
+    const conversations = conversationsRes.data;
+
+    if (!conversations.length) {
+      throw new Error(
+        `${branchNames?.length ? `${branchNames}. ` : ""}Замовлення №${normalizedOrderId}. Не було знайдено чату для клієнта.`,
+      );
+    }
+
+    const latest = conversations.reduce((a, b) =>
+      new Date(b.updated_at) > new Date(a.updated_at) ? b : a,
+    );
+    const conversationId = latest.id;
+
+    const assignedPeople = order?.assigned?.map((as) => as.full_name)?.join(",") ?? "";
+    const assignedText = `${assignedPeople?.length ? ` Відповідальні ${assignedPeople}` : ""}`;
+
+    const text =
+      attachmentIndex === 0
+        ? "Надсилаємо фото збірки без пакування на затвердження✨"
+        : "Надсилаємо фото у пакуванні на затвердження замовлення✨";
+
+    const automaticText = "\n\n**Це автоматичне повідомлення, надіслане системою";
+    const finalText = text + automaticText;
+
+    // Send text message first
+    try {
+      await keycrmAdminApiClient.post(
+        `/conversations/${conversationId}/messages`,
+        {
+          message_body: finalText,
+          type: "outgoing",
+          is_email: false,
+          attachments: [],
+          conversation_id: conversationId,
+        },
+      );
+    } catch (e) {
+      // Continue with image sending even if text fails
+      console.error(
+        `Failed to send text message for order ${normalizedOrderId}:`,
+        e,
+      );
+    }
+
+    // Wait before sending image
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+
+    await keycrmAdminApiClient.post(`/conversations/${conversationId}/messages`, {
+      message_body: null,
+      type: "outgoing",
+      is_email: false,
+      attachments: [
+        {
+          url: uploadedFileUrl,
+          type: "image",
+          file_name: uploadedFileName || "image.jpg",
+        },
+      ],
+      conversation_id: conversationId,
+    });
+  } catch (err: unknown) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    const normalizedOrderId = Number(orderId) || orderId;
+    const generalErrorMessage = errorMessage
+      ? `${errorMessage}. OrderId: ${normalizedOrderId}`
+      : `Невдала відправка фото при зміні статусу у замовлення №${normalizedOrderId}. Відправте вручну.`;
+
+    try {
+      await sendTelegramMessage(photoApprovalChatId, generalErrorMessage);
+    } catch (telegramError) {
+      console.error(
+        `Failed to send error message to Telegram for order ${normalizedOrderId}:`,
+        telegramError,
+      );
+    }
+  }
+};
+
+/**
  * Downloads a file from URL and uploads it to KeyCRM storage
  */
 async function downloadAndUploadFile(

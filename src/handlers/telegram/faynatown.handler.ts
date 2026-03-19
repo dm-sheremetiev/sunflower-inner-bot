@@ -211,6 +211,7 @@ export function registerFaynatownHandlers(
             : `комплекс ${branchId}`;
       await ctx.reply(`Створено ${count} перепусток для ${branchName}.`);
     } catch (error: unknown) {
+      console.log(error)
       const msg = error instanceof Error ? error.message : String(error);
       await ctx.reply(`Помилка створення перепусток: ${msg}`);
     }
