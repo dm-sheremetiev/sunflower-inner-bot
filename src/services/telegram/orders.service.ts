@@ -36,11 +36,9 @@ function matchesCrmUser(order: Order, crmUser: CrmUserRef): boolean {
 }
 
 function getOrderSortTs(order: Order): number | null {
+  const shippingDate = (order.shipping as any)?.shipping_date;
   const iso =
-    order.shipping?.shipping_date_actual ||
-    order.shipping?.shipping_date ||
-    order.ordered_at ||
-    order.created_at;
+    order.shipping?.shipping_date_actual || shippingDate || order.ordered_at || order.created_at;
   const d = dayjs(iso);
   return d.isValid() ? d.valueOf() : null;
 }
@@ -53,7 +51,6 @@ export type UserOrderSummary = {
   address?: string;
   statusName?: string;
   statusAlias?: string;
-  statusName?: string;
   grandTotal?: number;
   deliveryServiceName?: string;
 };
