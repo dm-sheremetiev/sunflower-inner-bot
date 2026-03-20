@@ -1044,6 +1044,10 @@ export const sendUploadedImageToCustomerChat = async (
 
     const automaticText = "\n\n**Це автоматичне повідомлення, надіслане системою";
     const finalText = text + automaticText;
+    const preparedAttachmentUrl = await prepareMetaCompatibleAttachmentUrl(
+      uploadedFileUrl,
+      uploadedFileName || "image.jpg",
+    );
 
     // Send text message first
     try {
@@ -1074,7 +1078,7 @@ export const sendUploadedImageToCustomerChat = async (
       is_email: false,
       attachments: [
         {
-          url: uploadedFileUrl,
+          url: preparedAttachmentUrl,
           type: "image",
           file_name: uploadedFileName || "image.jpg",
         },
@@ -1158,6 +1162,27 @@ async function downloadAndUploadFile(
     console.error(fullErrorMessage, error);
     throw new Error(fullErrorMessage);
   }
+}
+
+/**
+ * Meta/Instagram can reject nested proxy links like `download?url=...`.
+ * For Telegram and known proxy patterns, upload to KeyCRM storage first
+ * and use the resulting public URL in outgoing attachment.
+ */
+async function prepareMetaCompatibleAttachmentUrl(
+  sourceUrl: string,
+  fileName: string,
+): Promise<string> {
+  const source = sourceUrl.trim();
+  const lowered = source.toLowerCase();
+  const requiresReupload =
+    lowered.includes("api.telegram.org/") || lowered.includes("download?url=");
+
+  if (!requiresReupload) {
+    return source;
+  }
+
+  return downloadAndUploadFile(source, fileName);
 }
 
 /**
