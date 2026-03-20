@@ -1,4 +1,5 @@
 import dayjs from "dayjs";
+import axios from "axios";
 import { fileHelper } from "../../helpers/fileHelper.js";
 import { fetchAllOrders } from "../../helpers/keycrmHelper.js";
 import { keycrmApiClient } from "../../api/keycrmApiClient.js";
@@ -117,8 +118,15 @@ export async function getUserOrdersSummary(
 }
 
 export async function getOrderDetails(orderId: number): Promise<Order | null> {
-  const res = await keycrmApiClient.get<Order>(
-    `order/${orderId}?include=assigned,custom_fields,shipping.deliveryService,buyer,manager,products,tags,status,payments,attachments,attachments.file`,
-  );
-  return res?.data ?? null;
+  try {
+    const res = await keycrmApiClient.get<Order>(
+      `order/${orderId}?include=assigned,custom_fields,shipping.deliveryService,buyer,manager,products,tags,status,payments,attachments,attachments.file`,
+    );
+    return res?.data ?? null;
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 404) {
+      return null;
+    }
+    throw error;
+  }
 }

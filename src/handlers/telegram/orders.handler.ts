@@ -697,7 +697,7 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
 
     const order = await getOrderDetails(orderId);
     if (!order) {
-      await ctx.reply("Не вдалося отримати замовлення. Спробуйте пізніше.");
+      await ctx.reply("Такого замовлення не знайдено. Перевірте номер і спробуйте ще раз.");
       return;
     }
 
@@ -750,7 +750,7 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
 
     const order = await getOrderDetails(orderId);
     if (!order) {
-      await ctx.reply("Не вдалося оновити замовлення. Спробуйте пізніше.");
+      await ctx.reply("Такого замовлення не знайдено. Перевірте номер і спробуйте ще раз.");
       return;
     }
 
@@ -813,7 +813,7 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
 
     const order = await getOrderDetails(orderId);
     if (!order) {
-      await ctx.reply("Не вдалося отримати замовлення. Спробуйте пізніше.");
+      await ctx.reply("Такого замовлення не знайдено. Перевірте номер і спробуйте ще раз.");
       return;
     }
 
