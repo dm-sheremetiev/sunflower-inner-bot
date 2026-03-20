@@ -5,6 +5,12 @@ import { TelegramUserData } from "../../types/telegram.js";
 import type { Contact } from "grammy/types";
 
 const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+type CrmUser = {
+  id: number;
+  username?: string | null;
+  phone?: string | null;
+  full_name?: string | null;
+};
 
 export const isUserAuthenticated = (chatId: number): { isAuth: boolean; user?: TelegramUserData } => {
   const users = fileHelper.loadUsers();
@@ -36,7 +42,7 @@ export const processAuthentication = async (
     const crmUsers = await fetchActiveCrmUsers();
     
     // Attempt logic matching
-    const crmUser = crmUsers.find((u: any) => {
+    const crmUser = (crmUsers as CrmUser[]).find((u) => {
       const crmPhone = u.phone ? normalizePhone(u.phone) : null;
       
       if (crmPhone && phoneToSearch && crmPhone === phoneToSearch) return true;
@@ -95,7 +101,7 @@ export const verifyUserAccess = async (chatId: number): Promise<{ isValid: boole
 
     try {
       const crmUsers = await fetchActiveCrmUsers();
-      const stillActive = crmUsers.some((u: any) => {
+      const stillActive = (crmUsers as CrmUser[]).some((u) => {
         const crmPhone = u.phone ? normalizePhone(u.phone) : null;
         if (crmPhone && phoneToSearch && crmPhone === phoneToSearch) return true;
         if (usernameToSearch && u.username && u.username.toLowerCase() === usernameToSearch.toLowerCase()) return true;

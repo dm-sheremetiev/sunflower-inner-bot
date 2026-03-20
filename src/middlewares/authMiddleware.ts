@@ -9,6 +9,9 @@ export const authMiddleware = async (
   ctx: Context,
   next: NextFunction,
 ) => {
+  // React only in direct chats with the bot.
+  if (ctx.chat && ctx.chat.type !== "private") return;
+
   const chatId = ctx.from?.id;
   if (!chatId) return next();
 
