@@ -11,6 +11,7 @@ import { registerVideoPhotoHandlers } from "../handlers/telegram/videoPhoto.hand
 import { registerOrderHandlers } from "../handlers/telegram/orders.handler.js";
 import { registerFaynatownHandlers } from "../handlers/telegram/faynatown.handler.js";
 import { registerStudioHandler } from "../handlers/telegram/studio.handler.js";
+import { registerSunwaysShiftHandlers } from "../handlers/telegram/sunwaysShift.handler.js";
 import { authMiddleware } from "../middlewares/authMiddleware.js";
 
 export { isCourier };
@@ -58,6 +59,7 @@ export function initializeBot(): Bot<Context, Api<RawApi>> {
   registerVideoPhotoHandlers(bot);
   registerFaynatownHandlers(bot);
   registerStudioHandler(bot);
+  registerSunwaysShiftHandlers(bot);
 
   return bot;
 }
