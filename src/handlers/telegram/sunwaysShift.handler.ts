@@ -2,6 +2,7 @@ import type { Context } from "grammy";
 import { Bot, Api, RawApi } from "grammy";
 import { isCourier } from "../../services/telegram/config.js";
 import {
+  cancelSunwaysShift,
   finishSunwaysShift,
   getSunwaysVehicles,
   getSunwaysConfigError,
@@ -26,6 +27,7 @@ const SHIFT_PREFIX_FINISH = "shift:finish";
 const SHIFT_PREFIX_VEHICLE = "shift:vehicle:";
 const SHIFT_PREFIX_CONFIRM_START = "shift:confirm:start";
 const SHIFT_PREFIX_CONFIRM_FINISH = "shift:confirm:finish";
+const SHIFT_PREFIX_CANCEL_TODAY = "shift:cancel-today";
 const SHIFT_PREFIX_CANCEL = "shift:cancel";
 
 const shiftSessions = new Map<number, ShiftSession>();
@@ -39,6 +41,12 @@ function buildStartFinishInlineKeyboard() {
     inline_keyboard: [
       [{ text: "Почати зміну", callback_data: SHIFT_PREFIX_START }],
       [{ text: "Завершити зміну", callback_data: SHIFT_PREFIX_FINISH }],
+      [
+        {
+          text: "Скасувати сьогоднішю зміну",
+          callback_data: SHIFT_PREFIX_CANCEL_TODAY,
+        },
+      ],
     ],
   };
 }
@@ -158,6 +166,19 @@ export function registerSunwaysShiftHandlers(
       await ctx.reply("Скасовано.", {
         reply_markup: { remove_keyboard: true },
       });
+      return;
+    }
+
+    if (data === SHIFT_PREFIX_CANCEL_TODAY) {
+      await ctx.answerCallbackQuery();
+      await ctx.reply("Скасовую сьогоднішю зміну...");
+      const result = await cancelSunwaysShift(ctx.from.username!);
+      if (!result.ok) {
+        await ctx.reply(`Не вдалося скасувати зміну: ${result.message}`);
+        return;
+      }
+      shiftSessions.delete(userId);
+      await ctx.reply("Сьогоднішю зміну скасовано.");
       return;
     }
 

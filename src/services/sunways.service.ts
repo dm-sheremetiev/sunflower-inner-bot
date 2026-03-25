@@ -66,7 +66,18 @@ function mapSunwaysError(error: unknown): string {
       return "Кур'єра не знайдено за telegram username.";
     }
     if (status === 409) {
-      return "Зміну вже розпочато.";
+      if (apiMessage.includes("vehicle") && (apiMessage.includes("busy") || apiMessage.includes("занят"))) {
+        return "Авто зайняте іншою активною зміною.";
+      }
+      if (
+        apiMessage.includes("shift") &&
+        (apiMessage.includes("already") ||
+          apiMessage.includes("started") ||
+          apiMessage.includes("розпочато"))
+      ) {
+        return "Зміну вже розпочато.";
+      }
+      return "Неможливо виконати операцію (конфлікт стану зміни).";
     }
     if (status === 401) {
       return "Помилка авторизації Sunways API.";
@@ -169,6 +180,27 @@ export async function finishSunwaysShift(telegramUsername: string): Promise<
     );
 
     return { ok: true, endedAt: res.data?.data?.endedAt };
+  } catch (error) {
+    return { ok: false, message: mapSunwaysError(error) };
+  }
+}
+
+export async function cancelSunwaysShift(telegramUsername: string): Promise<
+  { ok: true } | { ok: false; message: string }
+> {
+  try {
+    await axios.delete(SUNWAYS_API_BASE_URL, {
+      data: {
+        telegramUsername: normalizeTelegramUsername(telegramUsername),
+      },
+      headers: {
+        "x-api-key": SUNWAYS_API_KEY,
+        "Content-Type": "application/json",
+      },
+      timeout: 30000,
+    });
+
+    return { ok: true };
   } catch (error) {
     return { ok: false, message: mapSunwaysError(error) };
   }
