@@ -36,6 +36,21 @@ function isSessionExpired(session: ShiftSession): boolean {
   return Date.now() - session.createdAt > SHIFT_SESSION_TTL_MS;
 }
 
+function formatKyivDateTime(iso?: string): string | null {
+  if (!iso) return null;
+  const dt = new Date(iso);
+  if (Number.isNaN(dt.getTime())) return null;
+  return new Intl.DateTimeFormat("uk-UA", {
+    timeZone: "Europe/Kyiv",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(dt);
+}
+
 function buildStartFinishInlineKeyboard() {
   return {
     inline_keyboard: [
@@ -276,8 +291,9 @@ export function registerSunwaysShiftHandlers(
       }
 
       shiftSessions.delete(userId);
+      const formattedEndedAt = formatKyivDateTime(result.endedAt);
       await ctx.reply(
-        `Зміну розпочато успішно.${result.endedAt ? ` Планове завершення: ${result.endedAt}` : ""}`,
+        `Зміну розпочато успішно.${formattedEndedAt ? ` Планове завершення: ${formattedEndedAt}` : ""}`,
         { reply_markup: { remove_keyboard: true } },
       );
       return;
