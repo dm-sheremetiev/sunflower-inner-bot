@@ -786,10 +786,10 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
     }
   });
 
-  bot.hears(/^\d+$/, async (ctx) => {
+  bot.hears(/^\d+$/, async (ctx, next) => {
     const telegramId = ctx.from?.id;
-    if (!telegramId) return;
-    if (!awaitingOrderId.has(telegramId)) return;
+    if (!telegramId) return next();
+    if (!awaitingOrderId.has(telegramId)) return next();
 
     const loadingMsg = await ctx.reply("Завантажую…");
 
