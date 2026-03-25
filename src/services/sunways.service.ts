@@ -1,4 +1,7 @@
 import axios from "axios";
+import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc.js";
+import timezone from "dayjs/plugin/timezone.js";
 
 type SunwaysVehicle = {
   id: string;
@@ -32,8 +35,6 @@ const SUNWAYS_VEHICLES_API_URL =
   process?.env?.SUNWAYS_VEHICLES_API_URL ||
   "https://sun-ways.vercel.app/api/public/vehicles";
 const SUNWAYS_API_KEY = process?.env?.PUBLIC_SHIFT_API_KEY || "";
-const SUNWAYS_SHIFT_END_TIME =
-  process?.env?.SUNWAYS_SHIFT_END_TIME || "21:00";
 const SUNWAYS_AUTO_CLOSE_SHIFTS_URL =
   process?.env?.SUNWAYS_AUTO_CLOSE_SHIFTS_URL ||
   "https://sun-ways.vercel.app/api/cron/auto-close-shifts";
@@ -41,6 +42,10 @@ const SUNWAYS_AUTO_CLOSE_SHIFTS_URL =
 // unless you explicitly override it.
 const SUNWAYS_CRON_SECRET =
   process?.env?.SUNWAYS_CRON_SECRET || SUNWAYS_API_KEY;
+const KYIV_TZ = "Europe/Kyiv";
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 export function getSunwaysConfigError(): string | null {
   if (!SUNWAYS_API_KEY) {
@@ -58,6 +63,10 @@ export function getSunwaysConfigError(): string | null {
 function normalizeTelegramUsername(username: string): string {
   const clean = username.trim().replace(/^@+/, "");
   return `@${clean.toLowerCase()}`;
+}
+
+function getCurrentKyivIsoString(): string {
+  return dayjs().tz(KYIV_TZ).format("YYYY-MM-DDTHH:mm:ssZ");
 }
 
 function mapSunwaysError(error: unknown): string {
@@ -180,7 +189,7 @@ export async function finishSunwaysShift(
       SUNWAYS_API_BASE_URL,
       {
         telegramUsername: normalizeTelegramUsername(telegramUsername),
-        endTime: SUNWAYS_SHIFT_END_TIME,
+        endTime: getCurrentKyivIsoString(),
         odometerEnd,
       },
       {
