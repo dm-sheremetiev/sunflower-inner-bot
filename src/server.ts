@@ -8,6 +8,7 @@ import { scheduleBiotimeCronJobs } from "./controllers/biotime.controller.js";
 import cors from "@fastify/cors";
 import { scheduleWorkloadResetCronJobs } from "./controllers/workload.controller.js";
 import { scheduleReserveCronJobs } from "./controllers/reserve.controller.js";
+import { scheduleSunwaysAutoCloseCronJob } from "./controllers/sunways.controller.js";
 
 export const server = Fastify({
   logger: {
@@ -54,3 +55,4 @@ bot.start();
 scheduleBiotimeCronJobs(bot);
 scheduleWorkloadResetCronJobs();
 scheduleReserveCronJobs(); // закоментуй цей рядок щоб вимкнути крону резерву
+scheduleSunwaysAutoCloseCronJob();

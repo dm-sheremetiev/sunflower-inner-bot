@@ -34,6 +34,13 @@ const SUNWAYS_VEHICLES_API_URL =
 const SUNWAYS_API_KEY = process?.env?.PUBLIC_SHIFT_API_KEY || "";
 const SUNWAYS_SHIFT_END_TIME =
   process?.env?.SUNWAYS_SHIFT_END_TIME || "21:00";
+const SUNWAYS_AUTO_CLOSE_SHIFTS_URL =
+  process?.env?.SUNWAYS_AUTO_CLOSE_SHIFTS_URL ||
+  "https://sun-ways.vercel.app/api/cron/auto-close-shifts";
+// For cron endpoint we use the same secret as for other SunWays public requests
+// unless you explicitly override it.
+const SUNWAYS_CRON_SECRET =
+  process?.env?.SUNWAYS_CRON_SECRET || SUNWAYS_API_KEY;
 
 export function getSunwaysConfigError(): string | null {
   if (!SUNWAYS_API_KEY) {
@@ -204,4 +211,31 @@ export async function cancelSunwaysShift(telegramUsername: string): Promise<
   } catch (error) {
     return { ok: false, message: mapSunwaysError(error) };
   }
+}
+
+type SunwaysAutoCloseResponse = {
+  success: boolean;
+  processedDateKyiv: string;
+  autoClosed: number;
+  skippedAlreadyClosed: number;
+};
+
+export async function triggerSunwaysAutoCloseShifts(): Promise<SunwaysAutoCloseResponse> {
+  if (!SUNWAYS_CRON_SECRET) {
+    throw new Error("CRON_SECRET is not configured");
+  }
+
+  const { data } = await axios.post<SunwaysAutoCloseResponse>(
+    SUNWAYS_AUTO_CLOSE_SHIFTS_URL,
+    {},
+    {
+      headers: {
+        Authorization: `Bearer ${SUNWAYS_CRON_SECRET}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 30000,
+    },
+  );
+
+  return data;
 }
