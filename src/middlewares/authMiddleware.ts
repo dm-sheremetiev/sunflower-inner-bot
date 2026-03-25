@@ -71,14 +71,15 @@ export const authMiddleware = async (
     }
 
     if (result.success) {
-      await ctx.reply(result.message, {
-        reply_markup: { remove_keyboard: true },
-      });
+      // Повідомлення "Доступ надано..." показуємо тільки для /start (кнопка старт).
+      if (isStartCommand) {
+        await ctx.reply(result.message, {
+          reply_markup: { remove_keyboard: true },
+        });
+      }
       await safeAnswerCallback("Готово");
-      // Якщо це /start — дати пройти хендлеру, щоб він показав наступні дії.
-      if (isStartCommand) return next();
-      // Якщо це ввід логіну/телефону — не проганяємо далі як команду.
-      return;
+      // Інакше — автентифікуємось "під капотом" і даємо хендлеру виконати команду.
+      return next();
     } else {
       await ctx.reply(result.message, { reply_markup: { remove_keyboard: true } });
       await safeAnswerCallback("Доступ не надано");
