@@ -140,6 +140,7 @@ export async function getSunwaysVehicles(): Promise<
 export async function startSunwaysShift(payload: {
   telegramUsername: string;
   vehicleId: string;
+  odometerStart: number;
   lat: number;
   lng: number;
 }): Promise<{ ok: true; endedAt?: string } | { ok: false; message: string }> {
@@ -149,6 +150,7 @@ export async function startSunwaysShift(payload: {
       {
         telegramUsername: normalizeTelegramUsername(payload.telegramUsername),
         vehicleId: payload.vehicleId,
+        odometerStart: payload.odometerStart,
         lat: payload.lat,
         lng: payload.lng,
       },
@@ -167,7 +169,10 @@ export async function startSunwaysShift(payload: {
   }
 }
 
-export async function finishSunwaysShift(telegramUsername: string): Promise<
+export async function finishSunwaysShift(
+  telegramUsername: string,
+  odometerEnd: number,
+): Promise<
   { ok: true; endedAt?: string } | { ok: false; message: string }
 > {
   try {
@@ -176,6 +181,7 @@ export async function finishSunwaysShift(telegramUsername: string): Promise<
       {
         telegramUsername: normalizeTelegramUsername(telegramUsername),
         endTime: SUNWAYS_SHIFT_END_TIME,
+        odometerEnd,
       },
       {
         headers: {

@@ -15,6 +15,8 @@ type ShiftSession = {
   type: ShiftFlowType;
   vehicleId?: string;
   vehicleLabel?: string;
+  odometerStart?: number;
+  odometerEnd?: number;
   lat?: number;
   lng?: number;
   createdAt: number;
@@ -226,9 +228,7 @@ export function registerSunwaysShiftHandlers(
         createdAt: Date.now(),
       });
       await ctx.answerCallbackQuery();
-      await ctx.reply("Підтвердьте завершення зміни:", {
-        reply_markup: buildConfirmFinishInlineKeyboard(),
-      });
+      await ctx.reply("Вкажіть фінальний пробіг (лише число, км).");
       return;
     }
 
@@ -255,8 +255,7 @@ export function registerSunwaysShiftHandlers(
 
       await ctx.answerCallbackQuery();
       await ctx.reply(
-        `Обрано авто: ${vehicle.label}. Надішліть геолокацію для старту зміни.`,
-        { reply_markup: buildRequestLocationKeyboard() },
+        `Обрано авто: ${vehicle.label}. Вкажіть стартовий пробіг (лише число, км).`,
       );
       return;
     }
@@ -267,6 +266,7 @@ export function registerSunwaysShiftHandlers(
         !current ||
         current.type !== "start" ||
         !current.vehicleId ||
+        current.odometerStart == null ||
         current.lat == null ||
         current.lng == null
       ) {
@@ -279,6 +279,7 @@ export function registerSunwaysShiftHandlers(
       const result = await startSunwaysShift({
         telegramUsername: ctx.from.username!,
         vehicleId: current.vehicleId,
+        odometerStart: current.odometerStart,
         lat: current.lat,
         lng: current.lng,
       });
@@ -301,14 +302,75 @@ export function registerSunwaysShiftHandlers(
 
     if (data === SHIFT_PREFIX_CONFIRM_FINISH) {
       await ctx.answerCallbackQuery();
+      const current = shiftSessions.get(userId);
+      if (!current || current.type !== "finish" || current.odometerEnd == null) {
+        await ctx.reply("Недостатньо даних для завершення. Вкажіть фінальний пробіг.");
+        return;
+      }
       await ctx.reply("Завершую зміну...");
-      const result = await finishSunwaysShift(ctx.from.username!);
+      const result = await finishSunwaysShift(ctx.from.username!, current.odometerEnd);
       if (!result.ok) {
         await ctx.reply(`Не вдалося завершити зміну: ${result.message}`);
         return;
       }
       shiftSessions.delete(userId);
       await ctx.reply("Зміну завершено.");
+      return;
+    }
+
+    return next();
+  });
+
+  bot.on("message:text", async (ctx, next) => {
+    const userId = ctx.from?.id;
+    if (!userId) return next();
+
+    const session = shiftSessions.get(userId);
+    if (!session) return next();
+    if (isSessionExpired(session)) {
+      shiftSessions.delete(userId);
+      await ctx.reply("Сесія застаріла. Почніть заново командою `зміна водія`.", {
+        parse_mode: "Markdown",
+        reply_markup: { remove_keyboard: true },
+      });
+      return;
+    }
+
+    const text = (ctx.message?.text ?? "").trim();
+    if (!text.length) return next();
+
+    const value = Number(text.replace(",", "."));
+    const isValidOdometer = Number.isFinite(value) && value >= 0;
+
+    if (session.type === "start" && session.vehicleId && session.odometerStart == null) {
+      if (!isValidOdometer) {
+        await ctx.reply("Пробіг має бути числом. Вкажіть стартовий пробіг ще раз.");
+        return;
+      }
+      shiftSessions.set(userId, {
+        ...session,
+        odometerStart: value,
+        createdAt: Date.now(),
+      });
+      await ctx.reply("Надішліть геолокацію для старту зміни.", {
+        reply_markup: buildRequestLocationKeyboard(),
+      });
+      return;
+    }
+
+    if (session.type === "finish" && session.odometerEnd == null) {
+      if (!isValidOdometer) {
+        await ctx.reply("Пробіг має бути числом. Вкажіть фінальний пробіг ще раз.");
+        return;
+      }
+      shiftSessions.set(userId, {
+        ...session,
+        odometerEnd: value,
+        createdAt: Date.now(),
+      });
+      await ctx.reply("Підтвердьте завершення зміни:", {
+        reply_markup: buildConfirmFinishInlineKeyboard(),
+      });
       return;
     }
 
@@ -327,6 +389,11 @@ export function registerSunwaysShiftHandlers(
         parse_mode: "Markdown",
         reply_markup: { remove_keyboard: true },
       });
+      return;
+    }
+
+    if (session.odometerStart == null) {
+      await ctx.reply("Спочатку вкажіть стартовий пробіг (числом).");
       return;
     }
 
