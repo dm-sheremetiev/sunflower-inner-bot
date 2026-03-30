@@ -11,6 +11,8 @@ export const productDeliveredStatus =
   process?.env?.PRODUCT_DELIVERED_STATUS || "23";
 export const zReportChatId = process?.env?.Z_REPORT_CHAT_ID || "";
 export const xReportChatId = process?.env?.X_REPORT_CHAT_ID || "";
+export const xReportReminderChatId =
+  process?.env?.X_REPORT_REMINDER_CHAT_ID || "";
 
 export const deliveryRegex = /^[Дд]оставка \d+$/;
 export const couriersList = couriers
