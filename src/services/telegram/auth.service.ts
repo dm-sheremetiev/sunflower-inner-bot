@@ -10,6 +10,7 @@ type CrmUser = {
   username?: string | null;
   phone?: string | null;
   full_name?: string | null;
+  role_id?: number;
 };
 
 export const isUserAuthenticated = (chatId: number): { isAuth: boolean; user?: TelegramUserData } => {
@@ -67,6 +68,7 @@ export const processAuthentication = async (
         phone: phoneToSearch ?? undefined,
         added_at: new Date().toISOString(),
         crmUserId: crmUser.id,
+        crmRoleId: crmUser.role_id,
         isAuthenticated: true,
         lastCheckedAt: Date.now(),
       };
@@ -101,17 +103,21 @@ export const verifyUserAccess = async (chatId: number): Promise<{ isValid: boole
 
     try {
       const crmUsers = await fetchActiveCrmUsers();
-      const stillActive = (crmUsers as CrmUser[]).some((u) => {
+      const matched = (crmUsers as CrmUser[]).find((u) => {
         const crmPhone = u.phone ? normalizePhone(u.phone) : null;
         if (crmPhone && phoneToSearch && crmPhone === phoneToSearch) return true;
         if (usernameToSearch && u.username && u.username.toLowerCase() === usernameToSearch.toLowerCase()) return true;
         return false;
       });
 
-      if (!stillActive) {
+      if (!matched) {
         user.isAuthenticated = false;
         fileHelper.saveUsers(users);
         return { isValid: false };
+      }
+
+      if (typeof matched.role_id === "number") {
+        user.crmRoleId = matched.role_id;
       }
 
       user.lastCheckedAt = now;

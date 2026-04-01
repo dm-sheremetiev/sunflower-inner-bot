@@ -3,6 +3,8 @@ export interface TelegramUserData {
   phone?: string;
   added_at: string;
   crmUserId?: number;
+  /** role_id користувача KeyCRM (для фільтрації списку замовлень флористів). */
+  crmRoleId?: number;
   isAuthenticated: boolean;
   lastCheckedAt: number;
 }

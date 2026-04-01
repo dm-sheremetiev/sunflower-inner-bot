@@ -1,10 +1,21 @@
 import dayjs from "dayjs";
 import axios from "axios";
 import { fileHelper } from "../../helpers/fileHelper.js";
-import { fetchAllOrders } from "../../helpers/keycrmHelper.js";
+import { fetchActiveCrmUsers, fetchAllOrders } from "../../helpers/keycrmHelper.js";
 import { keycrmApiClient } from "../../api/keycrmApiClient.js";
 import type { Order } from "../../types/keycrm.js";
 import { normalizePhone } from "../../helpers/utils.js";
+import { isCourier, isFloristRole } from "./config.js";
+
+/** Група статусів «доставка» в KeyCRM — такі замовлення не показуємо флористам у списку. */
+const DELIVERY_STATUS_GROUP_ID = 4;
+
+function orderVisibleInFloristList(order: Order): boolean {
+  const statusGroupId = order.status?.group_id ?? order.status_group_id;
+  if (statusGroupId === DELIVERY_STATUS_GROUP_ID) return false;
+  if (order.status?.is_closing_order === true) return false;
+  return true;
+}
 
 type CrmUserRef = { crmUserId?: number; username?: string; phone?: string };
 
@@ -63,6 +74,22 @@ export async function getUserOrdersSummary(
   const crmUser = users[chatId];
   if (!crmUser) return [];
 
+  if (crmUser.crmRoleId == null && crmUser.crmUserId != null) {
+    try {
+      const crmUsers = await fetchActiveCrmUsers();
+      const match = (crmUsers as { id: number; role_id?: number }[]).find(
+        (u) => u.id === crmUser.crmUserId,
+      );
+      if (match && typeof match.role_id === "number") {
+        crmUser.crmRoleId = match.role_id;
+        users[chatId] = crmUser;
+        fileHelper.saveUsers(users);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
   const startOfToday = dayjs().startOf("day").format("YYYY-MM-DD HH:mm:ss");
   const endOfNextDay = dayjs()
     .add(3, "day")
@@ -71,7 +98,11 @@ export async function getUserOrdersSummary(
   const shippingBetween = `${startOfToday},${endOfNextDay}`;
 
   const orders = await fetchAllOrders(shippingBetween);
-  const filtered = orders.filter((o) => matchesCrmUser(o, crmUser));
+  let filtered = orders.filter((o) => matchesCrmUser(o, crmUser));
+  const username = crmUser.username ?? "";
+  if (isFloristRole(crmUser.crmRoleId) && !isCourier(username)) {
+    filtered = filtered.filter(orderVisibleInFloristList);
+  }
 
   return filtered
     .map((o) => ({

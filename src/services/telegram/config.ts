@@ -20,6 +20,9 @@ export const couriersList = couriers
   .map((c) => c.toLowerCase().trim())
   .filter(Boolean);
 
+/** KeyCRM role_id — користувачі з цими ролями вважаються флористами для фільтра /my_orders. */
+export const FLORIST_ROLE_IDS: readonly number[] = [11, 13, 4];
+
 export const STUDIOS = ["файна", "француз", "севен"];
 export const STATUSES = ["зелений", "жовтий", "червоний"];
 
@@ -39,4 +42,9 @@ export const tz = "Europe/Kyiv";
 
 export function isCourier(username: string): boolean {
   return couriersList.includes(username.toLowerCase());
+}
+
+export function isFloristRole(roleId: number | undefined): boolean {
+  if (roleId == null) return false;
+  return FLORIST_ROLE_IDS.includes(roleId);
 }
