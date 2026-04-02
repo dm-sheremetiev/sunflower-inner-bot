@@ -26,6 +26,14 @@ type PosterCreateIncomingOrderResponse = {
   };
 };
 
+type PosterIncomingOrderProduct = {
+  product_id: number;
+  count: number;
+  price: number;
+  modificator_id?: number;
+  comment?: string;
+};
+
 type PosterReceiptRecord = {
   branchName: string;
   transactionId: number;
@@ -172,6 +180,121 @@ const buildPosterComment = (order: Order): string => {
   return parts.join(" | ");
 };
 
+const getNumericIdFromUnknown = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.trunc(value);
+  }
+  if (typeof value !== "string") return null;
+  const match = value.trim().match(/\d+/);
+  if (!match) return null;
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
+
+const getCustomFieldValueByUuid = (
+  customFields: unknown,
+  uuid: string,
+): unknown => {
+  if (!Array.isArray(customFields)) return null;
+  const field = customFields.find(
+    (item) =>
+      item &&
+      typeof item === "object" &&
+      (item as { uuid?: string }).uuid === uuid,
+  ) as { value?: unknown } | undefined;
+  return field?.value ?? null;
+};
+
+const extractPosterProductId = (product: Order["products"][number]): number | null => {
+  const anyProduct = product as unknown as Record<string, unknown>;
+  const fromProductCustomFields = getCustomFieldValueByUuid(
+    anyProduct.custom_fields,
+    "CT_1008",
+  );
+  const offer = anyProduct.offer as Record<string, unknown> | undefined;
+  const offerProduct = offer?.product as Record<string, unknown> | undefined;
+  const fromOfferProductCustomFields = getCustomFieldValueByUuid(
+    offerProduct?.custom_fields,
+    "CT_1008",
+  );
+
+  return (
+    getNumericIdFromUnknown(fromProductCustomFields) ??
+    getNumericIdFromUnknown(fromOfferProductCustomFields) ??
+    getNumericIdFromUnknown((product.offer as { product_id?: unknown })?.product_id) ??
+    null
+  );
+};
+
+const extractPosterModificatorId = (
+  product: Order["products"][number],
+): number | null => {
+  const anyProduct = product as unknown as Record<string, unknown>;
+  const direct = getNumericIdFromUnknown(anyProduct.modificator_id);
+  if (direct) return direct;
+
+  if (Array.isArray(product.properties)) {
+    for (const prop of product.properties) {
+      const key = String(prop.name ?? "").toLowerCase();
+      if (!key.includes("modificator") && !key.includes("модиф")) continue;
+      const parsed = getNumericIdFromUnknown(prop.value);
+      if (parsed) return parsed;
+    }
+  }
+
+  return null;
+};
+
+const mapOrderProductsToPosterProducts = (
+  order: Order,
+  reply: FastifyReply,
+): PosterIncomingOrderProduct[] => {
+  const mapped = (order.products ?? [])
+    .map((product) => {
+      const productId = extractPosterProductId(product);
+      const count = Number(product.quantity ?? 0);
+      const price = Number(product.price_sold ?? product.price ?? 0);
+      const modificatorId = extractPosterModificatorId(product);
+      const comment = String(product.comment ?? "").trim();
+
+      if (!productId || !Number.isFinite(count) || count <= 0) {
+        return null;
+      }
+
+      const payloadItem: PosterIncomingOrderProduct = {
+        product_id: productId,
+        count,
+        price: Number.isFinite(price) && price >= 0 ? price : 0,
+      };
+
+      if (modificatorId) payloadItem.modificator_id = modificatorId;
+      if (comment) payloadItem.comment = comment;
+
+      return payloadItem;
+    })
+    .filter((item): item is PosterIncomingOrderProduct => Boolean(item));
+
+  if (!mapped.length) {
+    reply.log.error(
+      {
+        orderId: order.id,
+        productsPreview: (order.products ?? []).map((product) => ({
+          name: product.name,
+          quantity: product.quantity,
+          offerProductId: (product.offer as { product_id?: unknown })?.product_id,
+          productCustomFields: (product as { custom_fields?: unknown }).custom_fields,
+          offerProductCustomFields: (product as { offer?: { product?: { custom_fields?: unknown } } })
+            .offer?.product?.custom_fields,
+          properties: product.properties,
+        })),
+      },
+      "Poster sync failed: cannot map KeyCRM products to Poster products",
+    );
+  }
+
+  return mapped;
+};
+
 export const createPosterOrdersAndStoreReceipts = async (
   order: Order,
   reply: FastifyReply,
@@ -206,26 +329,12 @@ export const createPosterOrdersAndStoreReceipts = async (
     .filter((item) => typeof item === "string" && item.trim().length > 0)
     .join(", ");
 
-  const products = (order.products ?? [])
-    .map((product) => ({
-      product_id: Number(product.offer?.product_id),
-      count: Number(product.quantity ?? 0),
-      price: Number(product.price_sold ?? product.price ?? 0),
-    }))
-    .filter(
-      (product) =>
-        Number.isFinite(product.product_id) &&
-        product.product_id > 0 &&
-        Number.isFinite(product.count) &&
-        product.count > 0 &&
-        Number.isFinite(product.price) &&
-        product.price >= 0,
-    );
+  const products = mapOrderProductsToPosterProducts(order, reply);
 
   if (!products.length) {
     reply.log.error(
       { orderId },
-      "Poster sync failed: no products with product_id",
+      "Poster sync failed: no products mapped for Poster payload",
     );
     return null;
   }
