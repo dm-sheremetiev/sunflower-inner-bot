@@ -5,7 +5,7 @@ import {
   sendPackMeMessage,
   sendPackedMessage,
   sendWaitingForDeliveryMessage,
-  sendNewOrderMessage,
+  processNewOrderWebhook,
   sendBareCompositionImageHandler,
   sendPackedCompositionImageHandler,
   validateStatusChangeHandler,
@@ -15,7 +15,7 @@ import {
 
 const webhookRoutes = async (server: FastifyInstance) => {
   server.post("/", getEvent);
-  server.post("/new", sendNewOrderMessage);
+  server.post("/new", processNewOrderWebhook);
   server.post("/prepared-without-package", sendWithoutPackageMessage);
   server.post("/pack-me", sendPackMeMessage);
   server.post("/packed", sendPackedMessage);

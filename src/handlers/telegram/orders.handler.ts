@@ -237,6 +237,7 @@ function buildOrdersListText(orders: UserOrderSummary[], page: number): string {
         `*${o.id}*\n` +
         `Статус: ${status}\n` +
         `💰 Загальна вартість: ${escapeAllSymbols(total)}\n` +
+        `🧾 Чек Poster: ${escapeAllSymbols(o.posterReceipt?.trim() || "—")}\n` +
         (discountLines.length ? `${discountLines.join("\n")}\n` : "") +
         `🕒 ${escapeAllSymbols(timeWindow)}\n` +
         `📍 ${address}`
@@ -259,6 +260,16 @@ function getTimeWindow(order: OrderWithCustomFields): string {
   const raw = field?.value;
   const v = raw != null ? String(raw).trim() : "";
   return v.length ? v : "Не визначено";
+}
+
+function getPosterReceipt(order: OrderWithCustomFields): string {
+  const field = order.custom_fields?.find((f) => {
+    const name = String(f.name ?? "").toLowerCase();
+    return f.uuid === "OR_1018" || name.includes("номер замовлення у poster");
+  });
+  const raw = field?.value;
+  const value = raw != null ? String(raw).trim() : "";
+  return value.length ? value : "—";
 }
 
 function getCustomFieldValue(
@@ -309,6 +320,7 @@ function buildOrderDetailsText(order: OrderWithAttachments): string {
 
   const balloons = getCustomFieldValue(order, "OR_1017", "кульки") ?? "—";
   const compositions = getCustomFieldValue(order, "OR_1015", "комп") ?? "—";
+  const posterReceipt = getPosterReceipt(order);
 
   const tagXL = (order.tags ?? []).some((t) =>
     /(^|\\s)(XL|XXL)(\\s|$)/i.test(String(t.name ?? "")),
@@ -371,6 +383,8 @@ function buildOrderDetailsText(order: OrderWithAttachments): string {
       `*Сплачено:* ${paidStr} грн`,
     );
   }
+
+  lines.push(`🧾 Чек Poster: ${escapeAllSymbols(posterReceipt)}`);
 
   if (managerComment !== "—") {
     lines.push(`\n*Коментар менеджера:*\n${managerComment}`);

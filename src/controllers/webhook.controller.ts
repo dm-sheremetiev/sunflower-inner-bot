@@ -133,6 +133,15 @@ export const sendNewOrderMessage = async (
   });
 };
 
+export const processNewOrderWebhook = async (
+  request: FastifyRequest<{ Body: ChangeOrderEvent | undefined }>,
+  reply: FastifyReply
+) => {
+  return safetyWrapper(request, reply, async (orderId) => {
+    await sendMessageAboutNewOrder(orderId, reply);
+  });
+};
+
 export const sendBareCompositionImageHandler = async (
   request: FastifyRequest<{ Body: ChangeOrderEvent | undefined }>,
   reply: FastifyReply

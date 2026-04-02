@@ -69,6 +69,7 @@ export type UserOrderSummary = {
   loyaltyDiscountPercent?: number;
   totalDiscount?: number;
   discountPercent?: number;
+  posterReceipt?: string;
 };
 
 export async function getUserOrdersSummary(
@@ -154,6 +155,22 @@ export async function getUserOrdersSummary(
         typeof o.discount_percent === "number"
           ? o.discount_percent
           : undefined,
+      posterReceipt:
+        (o.custom_fields as any)?.find?.(
+          (f: any) =>
+            f.uuid === "OR_1018" ||
+            String(f.name ?? "").toLowerCase().includes("номер замовлення у poster"),
+        )?.value
+          ? String(
+              (o.custom_fields as any).find(
+                (f: any) =>
+                  f.uuid === "OR_1018" ||
+                  String(f.name ?? "")
+                    .toLowerCase()
+                    .includes("номер замовлення у poster"),
+              )?.value,
+            ).trim()
+          : "",
     }))
     .sort((a, b) => {
       if (a.sortTs == null && b.sortTs == null) return a.id - b.id;

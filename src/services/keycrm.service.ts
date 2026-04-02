@@ -21,6 +21,7 @@ import {
 } from "./telegram.service.js";
 import axios from "axios";
 import { StorageUploadResponse } from "../types/keycrm.js";
+import { createPosterOrdersAndStoreReceipts } from "./poster.service.js";
 
 import "dotenv/config";
 import { extractBranchNames } from "../helpers/keycrmHelper.js";
@@ -62,6 +63,7 @@ export interface TagResponse {
   last_page_url: string;
   next_page_url: string;
 }
+
 
 const getOrderInfo = async (orderId: string | number, reply: FastifyReply) => {
   try {
@@ -614,9 +616,15 @@ export const sendMessageAboutNewOrder = async (
       return;
     }
 
+    const posterReceipt = await createPosterOrdersAndStoreReceipts(
+      order,
+      reply,
+      BRANCH_TAGS,
+    );
+
     // Для чатів, де менеджеру потрібно подивитися контекст замовлення з призначеними відповідальними,
     // використовуємо ту саму формулу, що й у повідомленнях про призначення.
-    const finalMessage = `${messageHelper.formatOrderMessage(order)}${assignedMessage}`;
+    const finalMessage = `${messageHelper.formatOrderMessage(order, posterReceipt)}${assignedMessage}`;
 
     const results: Array<
       | { chatId: string; status: string; response?: unknown }
@@ -962,9 +970,7 @@ export const sendUploadedImageToCustomerChat = async (
     );
 
     if (!order) {
-      throw new Error(
-        `Не було знайдено замовлення із №${normalizedOrderId}.`,
-      );
+      throw new Error(`Не було знайдено замовлення із №${normalizedOrderId}.`);
     }
 
     if (
@@ -1042,7 +1048,8 @@ export const sendUploadedImageToCustomerChat = async (
         ? "Надсилаємо фото збірки без пакування на затвердження✨"
         : "Надсилаємо фото у пакуванні на затвердження замовлення✨";
 
-    const automaticText = "\n\n**Це автоматичне повідомлення, надіслане системою";
+    const automaticText =
+      "\n\n**Це автоматичне повідомлення, надіслане системою";
     const finalText = text + automaticText;
     const preparedAttachmentUrl = await prepareMetaCompatibleAttachmentUrl(
       uploadedFileUrl,
@@ -1072,19 +1079,22 @@ export const sendUploadedImageToCustomerChat = async (
     // Wait before sending image
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
-    await keycrmAdminApiClient.post(`/conversations/${conversationId}/messages`, {
-      message_body: null,
-      type: "outgoing",
-      is_email: false,
-      attachments: [
-        {
-          url: preparedAttachmentUrl,
-          type: "image",
-          file_name: uploadedFileName || "image.jpg",
-        },
-      ],
-      conversation_id: conversationId,
-    });
+    await keycrmAdminApiClient.post(
+      `/conversations/${conversationId}/messages`,
+      {
+        message_body: null,
+        type: "outgoing",
+        is_email: false,
+        attachments: [
+          {
+            url: preparedAttachmentUrl,
+            type: "image",
+            file_name: uploadedFileName || "image.jpg",
+          },
+        ],
+        conversation_id: conversationId,
+      },
+    );
   } catch (err: unknown) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     const normalizedOrderId = Number(orderId) || orderId;

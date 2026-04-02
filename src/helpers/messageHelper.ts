@@ -43,7 +43,17 @@ export const extractCommentsFromOrder = (order: Order) => {
   };
 };
 
-const formatOrderMessage = (order: Order) => {
+const getPosterReceiptFromOrder = (order: Order): string | null => {
+  const field = order.custom_fields?.find((item) => {
+    const name = String(item.name ?? "").toLowerCase();
+    return item.uuid === "OR_1018" || name.includes("номер замовлення у poster");
+  });
+
+  const value = String(field?.value ?? "").trim();
+  return value.length ? value : null;
+};
+
+const formatOrderMessage = (order: Order, posterReceipt?: string | null) => {
   const { assigned, id } = order;
 
   const assignedPeopleNicknames =
@@ -61,6 +71,11 @@ const formatOrderMessage = (order: Order) => {
 
   if (productComment) {
     finalMessage += `. ${productComment}`;
+  }
+
+  const receiptText = posterReceipt ?? getPosterReceiptFromOrder(order);
+  if (receiptText) {
+    finalMessage += `. Номер чека Poster: ${receiptText}`;
   }
 
   return finalMessage;
