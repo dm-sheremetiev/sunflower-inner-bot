@@ -609,6 +609,16 @@ export const createPosterOrdersAndStoreReceipts = async (
         products,
       };
 
+      reply.log.info(
+        {
+          orderId,
+          branchName,
+          spotId: spot.spot_id,
+          incomingOrderPayload: payload,
+        },
+        "Poster incomingOrders.createIncomingOrder payload",
+      );
+
       const { data } = await posterApiClient.post<PosterCreateIncomingOrderResponse>(
         `/incomingOrders.createIncomingOrder`,
         payload,
