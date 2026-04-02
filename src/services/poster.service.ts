@@ -1,3 +1,4 @@
+import axios from "axios";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import timezone from "dayjs/plugin/timezone.js";
@@ -13,6 +14,8 @@ const KYIV_TZ = "Europe/Kyiv";
 const DEFAULT_POSTER_PHONE = "+380989000000";
 const POSTER_RECEIPT_FIELD_UUID = "OR_1018";
 const DELIVERY_TIME_FIELD_UUID = "OR_1006";
+const POSTER_PRODUCT_FIELD_UUID = "CT_1008";
+const POSTER_INGREDIENTS_FIELD_UUID = "CT_1014";
 
 type PosterSpot = {
   spot_id: number;
@@ -29,13 +32,15 @@ type PosterCreateIncomingOrderResponse = {
 type PosterIncomingOrderProduct = {
   product_id: number;
   count: number;
-  price: number;
   modificator_id?: number;
+  /** JSON-рядок: [{"m": dish_modification_id,"a": qty}, ...] відсортовано за m */
+  modification?: string;
   comment?: string;
 };
 
 type KeycrmProductDetails = {
   id: number;
+  parent_id?: number | null;
   custom_fields?: KeycrmCustomField[];
 };
 
@@ -150,17 +155,35 @@ const fetchPosterSpots = async (): Promise<PosterSpot[]> => {
   return Array.isArray(data?.response) ? data.response : [];
 };
 
+const normalizeSpotName = (value: string): string =>
+  value
+    .toLowerCase()
+    .replace(/[—–-]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const isOnlineShopSpotName = (name: string): boolean => {
+  const n = normalizeSpotName(name);
+  return (
+    n.includes("інтернет-магазин") ||
+    n.includes("інтернет магазин") ||
+    n.includes("интернет-магазин") ||
+    n.includes("интернет магазин")
+  );
+};
+
 const getPosterOnlineShopSpotsByBranches = (
   spots: PosterSpot[],
   branches: string[],
 ): Array<{ branchName: string; spot: PosterSpot }> => {
   return branches
     .map((branchName) => {
+      const branchNorm = normalizeSpotName(branchName);
       const spot = spots.find(
         (item) =>
           item.spot_delete === 0 &&
-          item.name.toLowerCase().includes(branchName.toLowerCase()) &&
-          item.name.toLowerCase().endsWith("інтернет-магазин"),
+          normalizeSpotName(item.name).includes(branchNorm) &&
+          isOnlineShopSpotName(item.name),
       );
 
       return spot ? { branchName, spot } : null;
@@ -194,6 +217,85 @@ const getNumericIdFromUnknown = (value: unknown): number | null => {
   if (!match) return null;
   const parsed = Number(match[0]);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
+
+const parseCt1014ModifierIds = (value: unknown): number[] => {
+  if (value == null) return [];
+  const raw = String(value).trim();
+  if (!raw) return [];
+  return raw
+    .split(/[,;|\s]+/)
+    .map((part) => getNumericIdFromUnknown(part))
+    .filter((id): id is number => id != null);
+};
+
+const buildPosterModificationString = (
+  entries: Array<{ m: number; a: number }>,
+): string | undefined => {
+  if (!entries.length) return undefined;
+  const sorted = [...entries].sort((a, b) => a.m - b.m);
+  return JSON.stringify(sorted);
+};
+
+const mergeCt1014FromProductSources = (
+  product: Order["products"][number],
+  catalogDetails: KeycrmProductDetails | undefined,
+): number[] => {
+  const anyProduct = product as unknown as Record<string, unknown>;
+  const offer = anyProduct.offer as Record<string, unknown> | undefined;
+  const offerProduct = offer?.product as Record<string, unknown> | undefined;
+  const seen = new Set<number>();
+  const out: number[] = [];
+  const pushAll = (value: unknown) => {
+    for (const id of parseCt1014ModifierIds(value)) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
+    }
+  };
+  pushAll(getCustomFieldValueByUuid(anyProduct.custom_fields, POSTER_INGREDIENTS_FIELD_UUID));
+  pushAll(
+    getCustomFieldValueByUuid(offerProduct?.custom_fields, POSTER_INGREDIENTS_FIELD_UUID),
+  );
+  if (catalogDetails) {
+    pushAll(
+      getCustomFieldValueByUuid(catalogDetails.custom_fields, POSTER_INGREDIENTS_FIELD_UUID),
+    );
+  }
+  return out;
+};
+
+const summarizeAxiosErrorForLog = (error: unknown): Record<string, unknown> => {
+  if (!axios.isAxiosError(error)) {
+    return {
+      message: error instanceof Error ? error.message : String(error),
+      name: error instanceof Error ? error.name : typeof error,
+    };
+  }
+  const cfg = error.config;
+  let requestData: unknown = cfg?.data;
+  if (typeof requestData === "string") {
+    const raw = requestData;
+    try {
+      requestData = JSON.parse(raw) as unknown;
+    } catch {
+      requestData =
+        raw.length > 2500 ? `${raw.slice(0, 2500)}…` : raw;
+    }
+  }
+  return {
+    message: error.message,
+    name: error.name,
+    code: error.code,
+    status: error.response?.status,
+    statusText: error.response?.statusText,
+    responseHeaders: error.response?.headers,
+    responseData: error.response?.data,
+    url: cfg?.url,
+    method: cfg?.method,
+    baseURL: cfg?.baseURL,
+    requestData,
+  };
 };
 
 const getCustomFieldValueByUuid = (
@@ -246,6 +348,18 @@ const fetchOrderProductsDetailsMap = async (
       if (details) map.set(id, details);
     }),
   );
+
+  const parentIds = [...map.values()]
+    .map((d) => getNumericIdFromUnknown(d.parent_id))
+    .filter((id): id is number => id != null && !map.has(id));
+
+  await Promise.all(
+    parentIds.map(async (parentId) => {
+      const details = await fetchProductDetailsById(parentId);
+      if (details) map.set(parentId, details);
+    }),
+  );
+
   return map;
 };
 
@@ -256,13 +370,13 @@ const extractPosterProductId = (
   const anyProduct = product as unknown as Record<string, unknown>;
   const fromProductCustomFields = getCustomFieldValueByUuid(
     anyProduct.custom_fields,
-    "CT_1008",
+    POSTER_PRODUCT_FIELD_UUID,
   );
   const offer = anyProduct.offer as Record<string, unknown> | undefined;
   const offerProduct = offer?.product as Record<string, unknown> | undefined;
   const fromOfferProductCustomFields = getCustomFieldValueByUuid(
     offerProduct?.custom_fields,
-    "CT_1008",
+    POSTER_PRODUCT_FIELD_UUID,
   );
   const offerProductId = getNumericIdFromUnknown(
     (product.offer as { product_id?: unknown })?.product_id,
@@ -274,7 +388,7 @@ const extractPosterProductId = (
   const fromCatalogProductCustomFields = catalogProductId
     ? getCustomFieldValueByUuid(
         productsDetailsMap.get(catalogProductId)?.custom_fields,
-        "CT_1008",
+        POSTER_PRODUCT_FIELD_UUID,
       )
     : null;
 
@@ -306,6 +420,27 @@ const extractPosterModificatorId = (
   return null;
 };
 
+const getCatalogProductIdForLine = (
+  product: Order["products"][number],
+): number | null => {
+  const offerProductId = getNumericIdFromUnknown(
+    (product.offer as { product_id?: unknown })?.product_id,
+  );
+  const fallbackProductId = getNumericIdFromUnknown(
+    (product as unknown as { id?: unknown })?.id,
+  );
+  return offerProductId ?? fallbackProductId;
+};
+
+const extractPosterIdFromDetails = (
+  details: KeycrmProductDetails | undefined,
+): number | null =>
+  details
+    ? getNumericIdFromUnknown(
+        getCustomFieldValueByUuid(details.custom_fields, POSTER_PRODUCT_FIELD_UUID),
+      )
+    : null;
+
 const mapOrderProductsToPosterProducts = async (
   order: Order,
   reply: FastifyReply,
@@ -313,23 +448,71 @@ const mapOrderProductsToPosterProducts = async (
   const productsDetailsMap = await fetchOrderProductsDetailsMap(order);
   const mapped = (order.products ?? [])
     .map((product) => {
-      const productId = extractPosterProductId(product, productsDetailsMap);
+      const catalogId = getCatalogProductIdForLine(product);
+      const details = catalogId ? productsDetailsMap.get(catalogId) : undefined;
+      const parentId = details
+        ? getNumericIdFromUnknown(details.parent_id)
+        : null;
+      const parentDetails =
+        parentId != null ? productsDetailsMap.get(parentId) : undefined;
+
       const count = Number(product.quantity ?? 0);
-      const price = Number(product.price_sold ?? product.price ?? 0);
-      const modificatorId = extractPosterModificatorId(product);
+      const modificatorFromLine = extractPosterModificatorId(product);
       const comment = String(product.comment ?? "").trim();
 
-      if (!productId || !Number.isFinite(count) || count <= 0) {
+      if (!Number.isFinite(count) || count <= 0) {
         return null;
+      }
+
+      let productId: number | null = null;
+      let modificatorId: number | undefined;
+      let modification: string | undefined;
+
+      const childPosterId = extractPosterIdFromDetails(details);
+      const parentPosterId = extractPosterIdFromDetails(parentDetails);
+
+      if (parentDetails && parentPosterId) {
+        productId = parentPosterId;
+      } else {
+        productId = extractPosterProductId(product, productsDetailsMap);
+      }
+
+      if (!productId) {
+        return null;
+      }
+
+      let techModifierIds = mergeCt1014FromProductSources(product, details);
+      if (
+        parentDetails &&
+        parentPosterId &&
+        childPosterId &&
+        childPosterId !== parentPosterId &&
+        !techModifierIds.includes(childPosterId)
+      ) {
+        techModifierIds = [...techModifierIds, childPosterId];
+      }
+      techModifierIds.sort((a, b) => a - b);
+
+      if (modificatorFromLine && modificatorFromLine !== productId) {
+        modificatorId = modificatorFromLine;
+      } else if (techModifierIds.length) {
+        const qty = Math.max(1, Math.trunc(count));
+        modification = buildPosterModificationString(
+          techModifierIds.map((m) => ({ m, a: qty })),
+        );
+      }
+
+      if (modificatorId && modificatorId === productId) {
+        modificatorId = undefined;
       }
 
       const payloadItem: PosterIncomingOrderProduct = {
         product_id: productId,
         count,
-        price: Number.isFinite(price) && price >= 0 ? price : 0,
       };
 
       if (modificatorId) payloadItem.modificator_id = modificatorId;
+      if (modification) payloadItem.modification = modification;
       if (comment) payloadItem.comment = comment;
 
       return payloadItem;
@@ -443,7 +626,12 @@ export const createPosterOrdersAndStoreReceipts = async (
       receipts.push({ branchName, transactionId });
     } catch (error) {
       reply.log.error(
-        { error, orderId, branchName, spotId: spot.spot_id },
+        {
+          orderId,
+          branchName,
+          spotId: spot.spot_id,
+          posterRequest: summarizeAxiosErrorForLog(error),
+        },
         "Poster sync failed while creating incoming order",
       );
     }

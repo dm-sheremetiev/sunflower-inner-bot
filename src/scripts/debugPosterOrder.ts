@@ -1,4 +1,5 @@
 import "dotenv/config";
+import axios from "axios";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import timezone from "dayjs/plugin/timezone.js";
@@ -12,6 +13,8 @@ dayjs.extend(timezone);
 const KYIV_TZ = "Europe/Kyiv";
 const DEFAULT_POSTER_PHONE = "+380989000000";
 const BRANCH_TAGS = ["Файна", "Севен", "Француз", "Республіка"];
+const POSTER_PRODUCT_FIELD_UUID = "CT_1008";
+const POSTER_INGREDIENTS_FIELD_UUID = "CT_1014";
 
 type PosterSpot = {
   spot_id: number;
@@ -21,6 +24,7 @@ type PosterSpot = {
 
 type KeycrmProductDetails = {
   id: number;
+  parent_id?: number | null;
   custom_fields?: Array<{ uuid?: string; value?: unknown }>;
 };
 
@@ -93,8 +97,87 @@ const fetchOrderProductsDetailsMap = async (
       if (details) map.set(id, details);
     }),
   );
+
+  const parentIds = [...map.values()]
+    .map((d) => getNumericIdFromUnknown(d.parent_id))
+    .filter((id): id is number => id != null && !map.has(id));
+
+  await Promise.all(
+    parentIds.map(async (parentId) => {
+      const details = await fetchProductDetailsById(parentId);
+      if (details) map.set(parentId, details);
+    }),
+  );
+
   return map;
 };
+
+const parseCt1014ModifierIds = (value: unknown): number[] => {
+  if (value == null) return [];
+  const raw = String(value).trim();
+  if (!raw) return [];
+  return raw
+    .split(/[,;|\s]+/)
+    .map((part) => getNumericIdFromUnknown(part))
+    .filter((id): id is number => id != null);
+};
+
+const buildPosterModificationString = (
+  entries: Array<{ m: number; a: number }>,
+): string | undefined => {
+  if (!entries.length) return undefined;
+  const sorted = [...entries].sort((a, b) => a.m - b.m);
+  return JSON.stringify(sorted);
+};
+
+const mergeCt1014FromProductSources = (
+  product: Order["products"][number],
+  catalogDetails: KeycrmProductDetails | undefined,
+): number[] => {
+  const anyProduct = product as unknown as Record<string, unknown>;
+  const offer = anyProduct.offer as Record<string, unknown> | undefined;
+  const offerProduct = offer?.product as Record<string, unknown> | undefined;
+  const seen = new Set<number>();
+  const out: number[] = [];
+  const pushAll = (value: unknown) => {
+    for (const id of parseCt1014ModifierIds(value)) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
+    }
+  };
+  pushAll(getCustomFieldValueByUuid(anyProduct.custom_fields, POSTER_INGREDIENTS_FIELD_UUID));
+  pushAll(
+    getCustomFieldValueByUuid(offerProduct?.custom_fields, POSTER_INGREDIENTS_FIELD_UUID),
+  );
+  if (catalogDetails) {
+    pushAll(
+      getCustomFieldValueByUuid(catalogDetails.custom_fields, POSTER_INGREDIENTS_FIELD_UUID),
+    );
+  }
+  return out;
+};
+
+const getCatalogProductIdForLine = (
+  product: Order["products"][number],
+): number | null => {
+  const offerProductId = getNumericIdFromUnknown(
+    (product.offer as { product_id?: unknown })?.product_id,
+  );
+  const fallbackProductId = getNumericIdFromUnknown(
+    (product as unknown as { id?: unknown })?.id,
+  );
+  return offerProductId ?? fallbackProductId;
+};
+
+const extractPosterIdFromDetails = (
+  details: KeycrmProductDetails | undefined,
+): number | null =>
+  details
+    ? getNumericIdFromUnknown(
+        getCustomFieldValueByUuid(details.custom_fields, POSTER_PRODUCT_FIELD_UUID),
+      )
+    : null;
 
 const normalizePosterPhone = (value: string | null | undefined): string => {
   if (!value) return DEFAULT_POSTER_PHONE;
@@ -113,13 +196,13 @@ const extractPosterProductId = (
   const anyProduct = product as unknown as Record<string, unknown>;
   const fromProductCustomFields = getCustomFieldValueByUuid(
     anyProduct.custom_fields,
-    "CT_1008",
+    POSTER_PRODUCT_FIELD_UUID,
   );
   const offer = anyProduct.offer as Record<string, unknown> | undefined;
   const offerProduct = offer?.product as Record<string, unknown> | undefined;
   const fromOfferProductCustomFields = getCustomFieldValueByUuid(
     offerProduct?.custom_fields,
-    "CT_1008",
+    POSTER_PRODUCT_FIELD_UUID,
   );
   const offerProductId = getNumericIdFromUnknown(
     (product.offer as { product_id?: unknown })?.product_id,
@@ -131,7 +214,7 @@ const extractPosterProductId = (
   const fromCatalogProductCustomFields = catalogProductId
     ? getCustomFieldValueByUuid(
         productsDetailsMap.get(catalogProductId)?.custom_fields,
-        "CT_1008",
+        POSTER_PRODUCT_FIELD_UUID,
       )
     : null;
 
@@ -233,20 +316,64 @@ async function main() {
     const anyProduct = product as unknown as Record<string, unknown>;
     const offer = anyProduct.offer as Record<string, unknown> | undefined;
     const offerProduct = offer?.product as Record<string, unknown> | undefined;
+    const catalogId = getCatalogProductIdForLine(product);
+    const details = catalogId ? productsDetailsMap.get(catalogId) : undefined;
+    const parentId = details ? getNumericIdFromUnknown(details.parent_id) : null;
+    const parentDetails =
+      parentId != null ? productsDetailsMap.get(parentId) : undefined;
+
+    const count = Number(product.quantity ?? 0);
+    const modificatorFromLine = extractPosterModificatorId(product);
+    let productId: number | null = null;
+    let modificatorId: number | undefined;
+    let modification: string | undefined;
+
+    const childPosterId = extractPosterIdFromDetails(details);
+    const parentPosterId = extractPosterIdFromDetails(parentDetails);
+
+    if (parentDetails && parentPosterId) {
+      productId = parentPosterId;
+    } else {
+      productId = extractPosterProductId(product, productsDetailsMap);
+    }
+
+    let techModifierIds = mergeCt1014FromProductSources(product, details);
+    if (
+      parentDetails &&
+      parentPosterId &&
+      childPosterId &&
+      childPosterId !== parentPosterId &&
+      !techModifierIds.includes(childPosterId)
+    ) {
+      techModifierIds = [...techModifierIds, childPosterId];
+    }
+    techModifierIds.sort((a, b) => a - b);
+
+    if (modificatorFromLine && productId && modificatorFromLine !== productId) {
+      modificatorId = modificatorFromLine;
+    } else if (techModifierIds.length && productId) {
+      const qty = Math.max(1, Math.trunc(count));
+      modification = buildPosterModificationString(
+        techModifierIds.map((m) => ({ m, a: qty })),
+      );
+    }
+
     return {
       name: product.name,
       quantity: product.quantity,
+      catalog_product_id: catalogId,
+      crm_parent_id: parentId,
       ct1008_from_product_custom_fields: getCustomFieldValueByUuid(
         anyProduct.custom_fields,
-        "CT_1008",
+        POSTER_PRODUCT_FIELD_UUID,
       ),
       ct1008_from_offer_product_custom_fields: getCustomFieldValueByUuid(
         offerProduct?.custom_fields,
-        "CT_1008",
+        POSTER_PRODUCT_FIELD_UUID,
       ),
       ct1014_from_product_custom_fields: getCustomFieldValueByUuid(
         anyProduct.custom_fields,
-        "CT_1014",
+        POSTER_INGREDIENTS_FIELD_UUID,
       ),
       ct1008_from_catalog_product_custom_fields: getCustomFieldValueByUuid(
         productsDetailsMap.get(
@@ -254,30 +381,85 @@ async function main() {
             getNumericIdFromUnknown((product as unknown as { id?: unknown })?.id) ??
             -1,
         )?.custom_fields,
-        "CT_1008",
+        POSTER_PRODUCT_FIELD_UUID,
       ),
       offer_product_id: (product.offer as { product_id?: unknown })?.product_id,
-      resolved_product_id: extractPosterProductId(product, productsDetailsMap),
-      resolved_modificator_id: extractPosterModificatorId(product),
+      resolved_product_id_poster: productId,
+      child_poster_ct1008: childPosterId,
+      parent_poster_ct1008: parentPosterId,
+      tech_modifier_ids_for_poster_m: techModifierIds,
+      resolved_modificator_id: modificatorId,
+      resolved_modification_json_string: modification,
       raw_properties: product.properties ?? [],
     };
   });
 
   const products = (order.products ?? [])
     .map((product) => {
-      const productId = extractPosterProductId(product, productsDetailsMap);
+      const catalogId = getCatalogProductIdForLine(product);
+      const details = catalogId ? productsDetailsMap.get(catalogId) : undefined;
+      const parentId = details ? getNumericIdFromUnknown(details.parent_id) : null;
+      const parentDetails =
+        parentId != null ? productsDetailsMap.get(parentId) : undefined;
+
       const count = Number(product.quantity ?? 0);
-      const price = Number(product.price_sold ?? product.price ?? 0);
-      const modificatorId = extractPosterModificatorId(product);
+      const modificatorFromLine = extractPosterModificatorId(product);
       const comment = String(product.comment ?? "").trim();
-      if (!productId || !Number.isFinite(count) || count <= 0) return null;
-      return {
+
+      if (!Number.isFinite(count) || count <= 0) {
+        return null;
+      }
+
+      let productId: number | null = null;
+      let modificatorId: number | undefined;
+      let modification: string | undefined;
+
+      const childPosterId = extractPosterIdFromDetails(details);
+      const parentPosterId = extractPosterIdFromDetails(parentDetails);
+
+      if (parentDetails && parentPosterId) {
+        productId = parentPosterId;
+      } else {
+        productId = extractPosterProductId(product, productsDetailsMap);
+      }
+
+      if (!productId) {
+        return null;
+      }
+
+      let techModifierIds = mergeCt1014FromProductSources(product, details);
+      if (
+        parentDetails &&
+        parentPosterId &&
+        childPosterId &&
+        childPosterId !== parentPosterId &&
+        !techModifierIds.includes(childPosterId)
+      ) {
+        techModifierIds = [...techModifierIds, childPosterId];
+      }
+      techModifierIds.sort((a, b) => a - b);
+
+      if (modificatorFromLine && modificatorFromLine !== productId) {
+        modificatorId = modificatorFromLine;
+      } else if (techModifierIds.length) {
+        const qty = Math.max(1, Math.trunc(count));
+        modification = buildPosterModificationString(
+          techModifierIds.map((m) => ({ m, a: qty })),
+        );
+      }
+
+      if (modificatorId && modificatorId === productId) {
+        modificatorId = undefined;
+      }
+
+      const row: Record<string, unknown> = {
         product_id: productId,
         count,
-        price: Number.isFinite(price) && price >= 0 ? price : 0,
-        ...(modificatorId ? { modificator_id: modificatorId } : {}),
-        ...(comment ? { comment } : {}),
       };
+      if (modificatorId) row.modificator_id = modificatorId;
+      if (modification) row.modification = modification;
+      if (comment) row.comment = comment;
+      return row;
     })
     .filter(Boolean);
 
@@ -348,6 +530,15 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error("Debug script failed:", error?.response?.data || error);
+  if (axios.isAxiosError(error)) {
+    console.error("Debug script failed (HTTP):", {
+      status: error.response?.status,
+      responseData: error.response?.data,
+      url: error.config?.url,
+      method: error.config?.method,
+    });
+  } else {
+    console.error("Debug script failed:", error);
+  }
   process.exit(1);
 });
