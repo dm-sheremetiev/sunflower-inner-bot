@@ -34,6 +34,11 @@ type PosterIncomingOrderProduct = {
   comment?: string;
 };
 
+type KeycrmProductDetails = {
+  id: number;
+  custom_fields?: KeycrmCustomField[];
+};
+
 type PosterReceiptRecord = {
   branchName: string;
   transactionId: number;
@@ -205,7 +210,49 @@ const getCustomFieldValueByUuid = (
   return field?.value ?? null;
 };
 
-const extractPosterProductId = (product: Order["products"][number]): number | null => {
+const fetchProductDetailsById = async (
+  productId: number,
+): Promise<KeycrmProductDetails | null> => {
+  try {
+    const { data } = await keycrmApiClient.get<KeycrmProductDetails>(
+      `products/${productId}?include=custom_fields`,
+    );
+    return data ?? null;
+  } catch {
+    return null;
+  }
+};
+
+const fetchOrderProductsDetailsMap = async (
+  order: Order,
+): Promise<Map<number, KeycrmProductDetails>> => {
+  const ids = new Set<number>();
+
+  for (const product of order.products ?? []) {
+    const offerProductId = getNumericIdFromUnknown(
+      (product.offer as { product_id?: unknown })?.product_id,
+    );
+    const fallbackProductId = getNumericIdFromUnknown(
+      (product as unknown as { id?: unknown })?.id,
+    );
+    const resolvedId = offerProductId ?? fallbackProductId;
+    if (resolvedId) ids.add(resolvedId);
+  }
+
+  const map = new Map<number, KeycrmProductDetails>();
+  await Promise.all(
+    [...ids].map(async (id) => {
+      const details = await fetchProductDetailsById(id);
+      if (details) map.set(id, details);
+    }),
+  );
+  return map;
+};
+
+const extractPosterProductId = (
+  product: Order["products"][number],
+  productsDetailsMap: Map<number, KeycrmProductDetails>,
+): number | null => {
   const anyProduct = product as unknown as Record<string, unknown>;
   const fromProductCustomFields = getCustomFieldValueByUuid(
     anyProduct.custom_fields,
@@ -217,10 +264,24 @@ const extractPosterProductId = (product: Order["products"][number]): number | nu
     offerProduct?.custom_fields,
     "CT_1008",
   );
+  const offerProductId = getNumericIdFromUnknown(
+    (product.offer as { product_id?: unknown })?.product_id,
+  );
+  const fallbackProductId = getNumericIdFromUnknown(
+    (product as unknown as { id?: unknown })?.id,
+  );
+  const catalogProductId = offerProductId ?? fallbackProductId;
+  const fromCatalogProductCustomFields = catalogProductId
+    ? getCustomFieldValueByUuid(
+        productsDetailsMap.get(catalogProductId)?.custom_fields,
+        "CT_1008",
+      )
+    : null;
 
   return (
     getNumericIdFromUnknown(fromProductCustomFields) ??
     getNumericIdFromUnknown(fromOfferProductCustomFields) ??
+    getNumericIdFromUnknown(fromCatalogProductCustomFields) ??
     getNumericIdFromUnknown((product.offer as { product_id?: unknown })?.product_id) ??
     null
   );
@@ -245,13 +306,14 @@ const extractPosterModificatorId = (
   return null;
 };
 
-const mapOrderProductsToPosterProducts = (
+const mapOrderProductsToPosterProducts = async (
   order: Order,
   reply: FastifyReply,
-): PosterIncomingOrderProduct[] => {
+): Promise<PosterIncomingOrderProduct[]> => {
+  const productsDetailsMap = await fetchOrderProductsDetailsMap(order);
   const mapped = (order.products ?? [])
     .map((product) => {
-      const productId = extractPosterProductId(product);
+      const productId = extractPosterProductId(product, productsDetailsMap);
       const count = Number(product.quantity ?? 0);
       const price = Number(product.price_sold ?? product.price ?? 0);
       const modificatorId = extractPosterModificatorId(product);
@@ -282,6 +344,16 @@ const mapOrderProductsToPosterProducts = (
           name: product.name,
           quantity: product.quantity,
           offerProductId: (product.offer as { product_id?: unknown })?.product_id,
+          fetchedCatalogProductCustomFields:
+            productsDetailsMap.get(
+              getNumericIdFromUnknown(
+                (product.offer as { product_id?: unknown })?.product_id,
+              ) ??
+                getNumericIdFromUnknown(
+                  (product as unknown as { id?: unknown })?.id,
+                ) ??
+                -1,
+            )?.custom_fields,
           productCustomFields: (product as { custom_fields?: unknown }).custom_fields,
           offerProductCustomFields: (product as { offer?: { product?: { custom_fields?: unknown } } })
             .offer?.product?.custom_fields,
@@ -329,8 +401,7 @@ export const createPosterOrdersAndStoreReceipts = async (
     .filter((item) => typeof item === "string" && item.trim().length > 0)
     .join(", ");
 
-  const products = mapOrderProductsToPosterProducts(order, reply);
-
+  const products = await mapOrderProductsToPosterProducts(order, reply);
   if (!products.length) {
     reply.log.error(
       { orderId },

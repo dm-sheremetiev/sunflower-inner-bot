@@ -68,7 +68,7 @@ export interface TagResponse {
 const getOrderInfo = async (orderId: string | number, reply: FastifyReply) => {
   try {
     const res = await keycrmApiClient.get<Order>(
-      `order/${+orderId}?include=assigned,custom_fields,shipping.deliveryService,buyer,manager,products,tags,payments`,
+      `order/${+orderId}?include=assigned,custom_fields,shipping.deliveryService,buyer,manager,products,products.offer,tags,payments`,
     );
 
     return res?.data;

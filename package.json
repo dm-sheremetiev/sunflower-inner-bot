@@ -11,7 +11,8 @@
     "start": "node dist/server.js",
     "start:watch": "nodemon",
     "dev": "nodemon src/server.ts",
-    "start-server": "pm2 stop dist/server.js && git pull && npm run build && pm2 start dist/server.js"
+    "start-server": "pm2 stop dist/server.js && git pull && npm run build && pm2 start dist/server.js",
+    "debug:poster:order": "tsx src/scripts/debugPosterOrder.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.0.1",
