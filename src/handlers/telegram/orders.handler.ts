@@ -181,7 +181,7 @@ function formatDiscountBlock(order: UserOrderSummary): string[] {
         ? `${order.loyaltyDiscountPercent}%`
         : "—";
     lines.push(
-      `🏷 Група лояльності: ${escapeAllSymbols(loyaltyName)} (${escapeAllSymbols(loyaltyPercent)})`,
+      `🏷 Група лояльності: ${escapeAllSymbols(loyaltyName)} \\(${escapeAllSymbols(loyaltyPercent)}\\)`,
     );
   }
 
@@ -189,13 +189,10 @@ function formatDiscountBlock(order: UserOrderSummary): string[] {
     order.totalDiscount !== 0 || order.discountPercent !== 0;
 
   if (hasOrderDiscount) {
-    const amount = order.totalDiscount
-      ? `${escapeAllSymbols(String(order.totalDiscount))} грн `
-      : "";
-    const percent =
-      order.discountPercent !== 0 ? `(${order.discountPercent}%)` : "";
+    const amount = `${order.totalDiscount} грн`;
+    const percent = `${order.discountPercent}%`;
     lines.push(
-      `🏷 Ручна знижка на замовлення: ${escapeAllSymbols(amount)}${escapeAllSymbols(percent)}`,
+      `🏷 Ручна знижка на замовлення: ${escapeAllSymbols(amount)} \\(${escapeAllSymbols(percent)}\\)`,
     );
   }
 
