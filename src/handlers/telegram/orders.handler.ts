@@ -171,6 +171,37 @@ function buildOrdersReplyKeyboard(
   return { keyboard, resize_keyboard: true };
 }
 
+function formatDiscountBlock(order: UserOrderSummary): string[] {
+  const lines: string[] = [];
+
+  if (order.loyaltyName || typeof order.loyaltyDiscountPercent === "number") {
+    const loyaltyName = order.loyaltyName?.trim() || "Система лояльності";
+    const loyaltyPercent =
+      typeof order.loyaltyDiscountPercent === "number"
+        ? `${order.loyaltyDiscountPercent}%`
+        : "—";
+    lines.push(
+      `🏷 Група лояльності: ${escapeAllSymbols(loyaltyName)} (${escapeAllSymbols(loyaltyPercent)})`,
+    );
+  }
+
+  const hasOrderDiscount =
+    order.totalDiscount !== 0 || order.discountPercent !== 0;
+
+  if (hasOrderDiscount) {
+    const amount = order.totalDiscount
+      ? `${escapeAllSymbols(String(order.totalDiscount))} грн `
+      : "";
+    const percent =
+      order.discountPercent !== 0 ? `(${order.discountPercent}%)` : "";
+    lines.push(
+      `🏷 Ручна знижка на замовлення: ${escapeAllSymbols(amount)}${escapeAllSymbols(percent)}`,
+    );
+  }
+
+  return lines;
+}
+
 function buildOrdersListText(orders: UserOrderSummary[], page: number): string {
   const start = page * PAGE_SIZE;
   const slice = orders.slice(start, start + PAGE_SIZE);
@@ -204,10 +235,12 @@ function buildOrdersListText(orders: UserOrderSummary[], page: number): string {
       const address = o.address?.trim().length
         ? escapeAllSymbols(o.address)
         : "—";
+      const discountLines = formatDiscountBlock(o);
       return (
         `*${o.id}*\n` +
         `Статус: ${status}\n` +
         `💰 Загальна вартість: ${escapeAllSymbols(total)}\n` +
+        (discountLines.length ? `${discountLines.join("\n")}\n` : "") +
         `🕒 ${escapeAllSymbols(timeWindow)}\n` +
         `📍 ${address}`
       );
@@ -465,10 +498,9 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
     const telegramId = ctx.from?.id;
     if (!telegramId) return;
     awaitingOrderId.set(telegramId, true);
-    await ctx.reply(
-      "Введіть номер замовлення (ID).",
-      { reply_markup: { remove_keyboard: true } },
-    );
+    await ctx.reply("Введіть номер замовлення (ID).", {
+      reply_markup: { remove_keyboard: true },
+    });
   });
   bot.hears(/^друк\s\d+$/i, async (ctx) => handlePrint(ctx));
   bot.hears(/^(\d+)\s+в\s+(.+)$/i, async (ctx) => handleAddTag(ctx));
@@ -483,7 +515,9 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
       if (data.startsWith(COMP_PHOTO_ATTACH_PREFIX)) {
         const rest = data.slice(COMP_PHOTO_ATTACH_PREFIX.length);
         const [attachmentIndexRaw, orderIdRaw] = rest.split(":");
-        const attachmentIndex = Number(attachmentIndexRaw) as CompositionAttachmentIndex;
+        const attachmentIndex = Number(
+          attachmentIndexRaw,
+        ) as CompositionAttachmentIndex;
         const orderId = Number(orderIdRaw);
 
         if (
@@ -512,7 +546,9 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
       if (data.startsWith(COMP_PHOTO_CANCEL_PREFIX)) {
         const rest = data.slice(COMP_PHOTO_CANCEL_PREFIX.length);
         const [attachmentIndexRaw, orderIdRaw] = rest.split(":");
-        const attachmentIndex = Number(attachmentIndexRaw) as CompositionAttachmentIndex;
+        const attachmentIndex = Number(
+          attachmentIndexRaw,
+        ) as CompositionAttachmentIndex;
         const orderId = Number(orderIdRaw);
 
         if (
@@ -545,7 +581,9 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
       if (data.startsWith(COMP_PHOTO_CONFIRM_PREFIX)) {
         const rest = data.slice(COMP_PHOTO_CONFIRM_PREFIX.length);
         const [attachmentIndexRaw, orderIdRaw] = rest.split(":");
-        const attachmentIndex = Number(attachmentIndexRaw) as CompositionAttachmentIndex;
+        const attachmentIndex = Number(
+          attachmentIndexRaw,
+        ) as CompositionAttachmentIndex;
         const orderId = Number(orderIdRaw);
 
         if (
@@ -618,7 +656,11 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
 
           // Replace loading message with success message
           try {
-            await ctx.api.editMessageText(chatId, loadingMsg.message_id, "Готово! Фото надіслано клієнту, статус замовлення змінено.");
+            await ctx.api.editMessageText(
+              chatId,
+              loadingMsg.message_id,
+              "Готово! Фото надіслано клієнту, статус замовлення змінено.",
+            );
           } catch {
             await ctx.reply(
               "Готово! Фото надіслано клієнту, статус замовлення змінено.",
@@ -627,7 +669,11 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
         } catch (e) {
           awaitingCompositionPhoto.delete(chatId);
           try {
-            await ctx.api.editMessageText(chatId, loadingMsg.message_id, "Сталася помилка. Спробуйте ще раз.");
+            await ctx.api.editMessageText(
+              chatId,
+              loadingMsg.message_id,
+              "Сталася помилка. Спробуйте ще раз.",
+            );
           } catch {
             await ctx.reply("Сталася помилка. Спробуйте ще раз.");
           }
@@ -697,7 +743,9 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
 
     const order = await getOrderDetails(orderId);
     if (!order) {
-      await ctx.reply("Такого замовлення не знайдено. Перевірте номер і спробуйте ще раз.");
+      await ctx.reply(
+        "Такого замовлення не знайдено. Перевірте номер і спробуйте ще раз.",
+      );
       return;
     }
 
@@ -750,7 +798,9 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
 
     const order = await getOrderDetails(orderId);
     if (!order) {
-      await ctx.reply("Такого замовлення не знайдено. Перевірте номер і спробуйте ще раз.");
+      await ctx.reply(
+        "Такого замовлення не знайдено. Перевірте номер і спробуйте ще раз.",
+      );
       return;
     }
 
@@ -813,7 +863,9 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
 
     const order = await getOrderDetails(orderId);
     if (!order) {
-      await ctx.reply("Такого замовлення не знайдено. Перевірте номер і спробуйте ще раз.");
+      await ctx.reply(
+        "Такого замовлення не знайдено. Перевірте номер і спробуйте ще раз.",
+      );
       return;
     }
 
@@ -826,7 +878,9 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
     const attachments = (order as OrderWithAttachments).attachments ?? [];
     const urls: string[] = attachments
       .map((a) => a.file?.url)
-      .filter((u): u is string => typeof u === "string" && u.startsWith("http"));
+      .filter(
+        (u): u is string => typeof u === "string" && u.startsWith("http"),
+      );
 
     if (urls.length === 1) {
       try {

@@ -24,8 +24,7 @@ export interface ChangeOrderContext {
   shipping_price: string;
   taxes: string;
   register_id: string | null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  fiscal_result: any[];
+  fiscal_result: unknown[];
   fiscal_status: string;
   shipping_type_id: number | null;
   manager_id: number;
@@ -82,6 +81,14 @@ export interface Order {
   grand_total: number;
   promocode: string;
   total_discount: number;
+  discount_amount?: number;
+  discount_percent?: number;
+  discount_data?: {
+    loyalty?: {
+      name?: string;
+      discount?: number;
+    };
+  };
   expenses_sum: number;
   shipping_price: number;
   wrap_price: number;

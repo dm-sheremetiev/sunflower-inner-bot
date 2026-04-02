@@ -65,6 +65,10 @@ export type UserOrderSummary = {
   statusAlias?: string;
   grandTotal?: number;
   deliveryServiceName?: string;
+  loyaltyName?: string;
+  loyaltyDiscountPercent?: number;
+  totalDiscount?: number;
+  discountPercent?: number;
 };
 
 export async function getUserOrdersSummary(
@@ -139,6 +143,17 @@ export async function getUserOrdersSummary(
       statusAlias: (o.status as any)?.alias,
       grandTotal: o.grand_total,
       deliveryServiceName: (o.shipping as any)?.deliveryService?.name,
+      loyaltyName: o.discount_data?.loyalty?.name,
+      loyaltyDiscountPercent:
+        typeof o.discount_data?.loyalty?.discount === "number"
+          ? o.discount_data.loyalty.discount
+          : undefined,
+      totalDiscount:
+        typeof o.total_discount === "number" ? o.total_discount : undefined,
+      discountPercent:
+        typeof o.discount_percent === "number"
+          ? o.discount_percent
+          : undefined,
     }))
     .sort((a, b) => {
       if (a.sortTs == null && b.sortTs == null) return a.id - b.id;
