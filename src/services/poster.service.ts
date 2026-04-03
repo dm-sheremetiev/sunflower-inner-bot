@@ -16,6 +16,9 @@ const POSTER_RECEIPT_FIELD_UUID = "OR_1018";
 const DELIVERY_TIME_FIELD_UUID = "OR_1006";
 const POSTER_PRODUCT_FIELD_UUID = "CT_1008";
 const POSTER_INGREDIENTS_FIELD_UUID = "CT_1014";
+const POSTER_INCOMING_PARENT_PRODUCT_FIELD_UUID = "CT_1022";
+const POSTER_INCOMING_MODIFICATOR_FIELD_UUID = "CT_1025";
+const POSTER_INCOMING_DISH_MODIFICATION_FIELD_UUID = "CT_1026";
 
 type PosterSpot = {
   spot_id: number;
@@ -54,6 +57,16 @@ type KeycrmCustomField = {
   uuid?: string;
   name?: string;
   value?: unknown;
+};
+
+type OrderProduct = Order["products"][number];
+type OrderProductWithMeta = OrderProduct & {
+  id?: number;
+  custom_fields?: KeycrmCustomField[];
+  modificator_id?: number | string;
+  offer: OrderProduct["offer"] & {
+    product?: { custom_fields?: KeycrmCustomField[] };
+  };
 };
 
 const extractOrderBranches = (order: Order, branchTags: string[]): string[] => {
@@ -156,11 +169,7 @@ const fetchPosterSpots = async (): Promise<PosterSpot[]> => {
 };
 
 const normalizeSpotName = (value: string): string =>
-  value
-    .toLowerCase()
-    .replace(/[—–-]/g, "-")
-    .replace(/\s+/g, " ")
-    .trim();
+  value.toLowerCase().replace(/[—–-]/g, "-").replace(/\s+/g, " ").trim();
 
 const isOnlineShopSpotName = (name: string): boolean => {
   const n = normalizeSpotName(name);
@@ -238,12 +247,11 @@ const buildPosterModificationString = (
 };
 
 const mergeCt1014FromProductSources = (
-  product: Order["products"][number],
+  product: OrderProduct,
   catalogDetails: KeycrmProductDetails | undefined,
 ): number[] => {
-  const anyProduct = product as unknown as Record<string, unknown>;
-  const offer = anyProduct.offer as Record<string, unknown> | undefined;
-  const offerProduct = offer?.product as Record<string, unknown> | undefined;
+  const productMeta = asOrderProductWithMeta(product);
+  const offerProduct = productMeta.offer?.product;
   const seen = new Set<number>();
   const out: number[] = [];
   const pushAll = (value: unknown) => {
@@ -253,16 +261,58 @@ const mergeCt1014FromProductSources = (
       out.push(id);
     }
   };
-  pushAll(getCustomFieldValueByUuid(anyProduct.custom_fields, POSTER_INGREDIENTS_FIELD_UUID));
   pushAll(
-    getCustomFieldValueByUuid(offerProduct?.custom_fields, POSTER_INGREDIENTS_FIELD_UUID),
+    getCustomFieldValueByUuid(
+      productMeta.custom_fields,
+      POSTER_INGREDIENTS_FIELD_UUID,
+    ),
+  );
+  pushAll(
+    getCustomFieldValueByUuid(
+      offerProduct?.custom_fields,
+      POSTER_INGREDIENTS_FIELD_UUID,
+    ),
   );
   if (catalogDetails) {
     pushAll(
-      getCustomFieldValueByUuid(catalogDetails.custom_fields, POSTER_INGREDIENTS_FIELD_UUID),
+      getCustomFieldValueByUuid(
+        catalogDetails.custom_fields,
+        POSTER_INGREDIENTS_FIELD_UUID,
+      ),
     );
   }
   return out;
+};
+
+const getIncomingFieldRawValue = (
+  product: OrderProduct,
+  catalogDetails: KeycrmProductDetails | undefined,
+  uuid: string,
+): unknown => {
+  const productMeta = asOrderProductWithMeta(product);
+  const offerProduct = productMeta.offer?.product;
+
+  return (
+    getCustomFieldValueByUuid(productMeta.custom_fields, uuid) ??
+    getCustomFieldValueByUuid(offerProduct?.custom_fields, uuid) ??
+    getCustomFieldValueByUuid(catalogDetails?.custom_fields, uuid)
+  );
+};
+
+const parseFieldIds = (value: unknown): number[] => {
+  if (value == null) {
+    return [];
+  }
+
+  const raw = String(value).trim();
+  if (!raw) {
+    return [];
+  }
+
+  return raw
+    .split(/[,;|\s]+/)
+    .map((part) => getNumericIdFromUnknown(part))
+    .filter((id): id is number => id != null);
 };
 
 const summarizeAxiosErrorForLog = (error: unknown): Record<string, unknown> => {
@@ -279,8 +329,7 @@ const summarizeAxiosErrorForLog = (error: unknown): Record<string, unknown> => {
     try {
       requestData = JSON.parse(raw) as unknown;
     } catch {
-      requestData =
-        raw.length > 2500 ? `${raw.slice(0, 2500)}…` : raw;
+      requestData = raw.length > 2500 ? `${raw.slice(0, 2500)}…` : raw;
     }
   }
   return {
@@ -312,6 +361,9 @@ const getCustomFieldValueByUuid = (
   return field?.value ?? null;
 };
 
+const asOrderProductWithMeta = (product: OrderProduct): OrderProductWithMeta =>
+  product as OrderProductWithMeta;
+
 const fetchProductDetailsById = async (
   productId: number,
 ): Promise<KeycrmProductDetails | null> => {
@@ -331,12 +383,9 @@ const fetchOrderProductsDetailsMap = async (
   const ids = new Set<number>();
 
   for (const product of order.products ?? []) {
-    const offerProductId = getNumericIdFromUnknown(
-      (product.offer as { product_id?: unknown })?.product_id,
-    );
-    const fallbackProductId = getNumericIdFromUnknown(
-      (product as unknown as { id?: unknown })?.id,
-    );
+    const productMeta = asOrderProductWithMeta(product);
+    const offerProductId = getNumericIdFromUnknown(product.offer?.product_id);
+    const fallbackProductId = getNumericIdFromUnknown(productMeta.id);
     const resolvedId = offerProductId ?? fallbackProductId;
     if (resolvedId) ids.add(resolvedId);
   }
@@ -364,26 +413,21 @@ const fetchOrderProductsDetailsMap = async (
 };
 
 const extractPosterProductId = (
-  product: Order["products"][number],
+  product: OrderProduct,
   productsDetailsMap: Map<number, KeycrmProductDetails>,
 ): number | null => {
-  const anyProduct = product as unknown as Record<string, unknown>;
+  const productMeta = asOrderProductWithMeta(product);
   const fromProductCustomFields = getCustomFieldValueByUuid(
-    anyProduct.custom_fields,
+    productMeta.custom_fields,
     POSTER_PRODUCT_FIELD_UUID,
   );
-  const offer = anyProduct.offer as Record<string, unknown> | undefined;
-  const offerProduct = offer?.product as Record<string, unknown> | undefined;
+  const offerProduct = productMeta.offer?.product;
   const fromOfferProductCustomFields = getCustomFieldValueByUuid(
     offerProduct?.custom_fields,
     POSTER_PRODUCT_FIELD_UUID,
   );
-  const offerProductId = getNumericIdFromUnknown(
-    (product.offer as { product_id?: unknown })?.product_id,
-  );
-  const fallbackProductId = getNumericIdFromUnknown(
-    (product as unknown as { id?: unknown })?.id,
-  );
+  const offerProductId = getNumericIdFromUnknown(product.offer?.product_id);
+  const fallbackProductId = getNumericIdFromUnknown(productMeta.id);
   const catalogProductId = offerProductId ?? fallbackProductId;
   const fromCatalogProductCustomFields = catalogProductId
     ? getCustomFieldValueByUuid(
@@ -396,16 +440,16 @@ const extractPosterProductId = (
     getNumericIdFromUnknown(fromProductCustomFields) ??
     getNumericIdFromUnknown(fromOfferProductCustomFields) ??
     getNumericIdFromUnknown(fromCatalogProductCustomFields) ??
-    getNumericIdFromUnknown((product.offer as { product_id?: unknown })?.product_id) ??
+    getNumericIdFromUnknown(product.offer?.product_id) ??
     null
   );
 };
 
 const extractPosterModificatorId = (
-  product: Order["products"][number],
+  product: OrderProduct,
 ): number | null => {
-  const anyProduct = product as unknown as Record<string, unknown>;
-  const direct = getNumericIdFromUnknown(anyProduct.modificator_id);
+  const productMeta = asOrderProductWithMeta(product);
+  const direct = getNumericIdFromUnknown(productMeta.modificator_id);
   if (direct) return direct;
 
   if (Array.isArray(product.properties)) {
@@ -421,14 +465,12 @@ const extractPosterModificatorId = (
 };
 
 const getCatalogProductIdForLine = (
-  product: Order["products"][number],
+  product: OrderProduct,
 ): number | null => {
-  const offerProductId = getNumericIdFromUnknown(
-    (product.offer as { product_id?: unknown })?.product_id,
-  );
-  const fallbackProductId = getNumericIdFromUnknown(
-    (product as unknown as { id?: unknown })?.id,
-  );
+  const productMeta = asOrderProductWithMeta(product);
+  const offerProductId = getNumericIdFromUnknown(product.offer?.product_id);
+  const fallbackProductId = getNumericIdFromUnknown(productMeta.id);
+
   return offerProductId ?? fallbackProductId;
 };
 
@@ -437,7 +479,10 @@ const extractPosterIdFromDetails = (
 ): number | null =>
   details
     ? getNumericIdFromUnknown(
-        getCustomFieldValueByUuid(details.custom_fields, POSTER_PRODUCT_FIELD_UUID),
+        getCustomFieldValueByUuid(
+          details.custom_fields,
+          POSTER_PRODUCT_FIELD_UUID,
+        ),
       )
     : null;
 
@@ -450,11 +495,6 @@ const mapOrderProductsToPosterProducts = async (
     .map((product) => {
       const catalogId = getCatalogProductIdForLine(product);
       const details = catalogId ? productsDetailsMap.get(catalogId) : undefined;
-      const parentId = details
-        ? getNumericIdFromUnknown(details.parent_id)
-        : null;
-      const parentDetails =
-        parentId != null ? productsDetailsMap.get(parentId) : undefined;
 
       const count = Number(product.quantity ?? 0);
       const modificatorFromLine = extractPosterModificatorId(product);
@@ -469,37 +509,62 @@ const mapOrderProductsToPosterProducts = async (
       let modification: string | undefined;
 
       const childPosterId = extractPosterIdFromDetails(details);
-      const parentPosterId = extractPosterIdFromDetails(parentDetails);
+      const incomingParentProductId = parseFieldIds(
+        getIncomingFieldRawValue(
+          product,
+          details,
+          POSTER_INCOMING_PARENT_PRODUCT_FIELD_UUID,
+        ),
+      )[0];
 
-      if (parentDetails && parentPosterId) {
-        productId = parentPosterId;
-      } else {
-        productId = extractPosterProductId(product, productsDetailsMap);
-      }
+      const incomingModificatorId = parseFieldIds(
+        getIncomingFieldRawValue(
+          product,
+          details,
+          POSTER_INCOMING_MODIFICATOR_FIELD_UUID,
+        ),
+      )[0];
+      const incomingDishModificationIds = parseFieldIds(
+        getIncomingFieldRawValue(
+          product,
+          details,
+          POSTER_INCOMING_DISH_MODIFICATION_FIELD_UUID,
+        ),
+      );
+
+      productId =
+        incomingParentProductId ??
+        extractPosterProductId(product, productsDetailsMap);
 
       if (!productId) {
         return null;
       }
 
-      let techModifierIds = mergeCt1014FromProductSources(product, details);
-      if (
-        parentDetails &&
-        parentPosterId &&
-        childPosterId &&
-        childPosterId !== parentPosterId &&
-        !techModifierIds.includes(childPosterId)
-      ) {
-        techModifierIds = [...techModifierIds, childPosterId];
-      }
-      techModifierIds.sort((a, b) => a - b);
-
-      if (modificatorFromLine && modificatorFromLine !== productId) {
+      if (incomingModificatorId && incomingModificatorId !== productId) {
+        modificatorId = incomingModificatorId;
+      } else if (modificatorFromLine && modificatorFromLine !== productId) {
         modificatorId = modificatorFromLine;
-      } else if (techModifierIds.length) {
-        const qty = Math.max(1, Math.trunc(count));
-        modification = buildPosterModificationString(
-          techModifierIds.map((m) => ({ m, a: qty })),
-        );
+      } else {
+        let techModifierIds = [...incomingDishModificationIds];
+        if (!techModifierIds.length) {
+          // Backward-compat fallback for older synced data
+          techModifierIds = mergeCt1014FromProductSources(product, details);
+          if (
+            childPosterId &&
+            childPosterId !== productId &&
+            !techModifierIds.includes(childPosterId)
+          ) {
+            techModifierIds = [...techModifierIds, childPosterId];
+          }
+        }
+
+        techModifierIds.sort((a, b) => a - b);
+        if (techModifierIds.length) {
+          const qty = Math.max(1, Math.trunc(count));
+          modification = buildPosterModificationString(
+            techModifierIds.map((m) => ({ m, a: qty })),
+          );
+        }
       }
 
       if (modificatorId && modificatorId === productId) {
@@ -523,25 +588,22 @@ const mapOrderProductsToPosterProducts = async (
     reply.log.error(
       {
         orderId: order.id,
-        productsPreview: (order.products ?? []).map((product) => ({
-          name: product.name,
-          quantity: product.quantity,
-          offerProductId: (product.offer as { product_id?: unknown })?.product_id,
-          fetchedCatalogProductCustomFields:
-            productsDetailsMap.get(
-              getNumericIdFromUnknown(
-                (product.offer as { product_id?: unknown })?.product_id,
-              ) ??
-                getNumericIdFromUnknown(
-                  (product as unknown as { id?: unknown })?.id,
-                ) ??
+        productsPreview: (order.products ?? []).map((product) => {
+          const productMeta = asOrderProductWithMeta(product);
+          return {
+            name: product.name,
+            quantity: product.quantity,
+            offerProductId: product.offer?.product_id,
+            fetchedCatalogProductCustomFields: productsDetailsMap.get(
+              getNumericIdFromUnknown(product.offer?.product_id) ??
+                getNumericIdFromUnknown(productMeta.id) ??
                 -1,
             )?.custom_fields,
-          productCustomFields: (product as { custom_fields?: unknown }).custom_fields,
-          offerProductCustomFields: (product as { offer?: { product?: { custom_fields?: unknown } } })
-            .offer?.product?.custom_fields,
-          properties: product.properties,
-        })),
+            productCustomFields: productMeta.custom_fields,
+            offerProductCustomFields: productMeta.offer?.product?.custom_fields,
+            properties: product.properties,
+          };
+        }),
       },
       "Poster sync failed: cannot map KeyCRM products to Poster products",
     );
@@ -609,20 +671,11 @@ export const createPosterOrdersAndStoreReceipts = async (
         products,
       };
 
-      reply.log.info(
-        {
-          orderId,
-          branchName,
-          spotId: spot.spot_id,
-          incomingOrderPayload: payload,
-        },
-        "Poster incomingOrders.createIncomingOrder payload",
-      );
-
-      const { data } = await posterApiClient.post<PosterCreateIncomingOrderResponse>(
-        `/incomingOrders.createIncomingOrder`,
-        payload,
-      );
+      const { data } =
+        await posterApiClient.post<PosterCreateIncomingOrderResponse>(
+          `/incomingOrders.createIncomingOrder`,
+          payload,
+        );
 
       const transactionId = Number(data?.response?.transaction_id);
       if (!Number.isFinite(transactionId) || transactionId <= 0) {

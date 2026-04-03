@@ -15,6 +15,9 @@ const DEFAULT_POSTER_PHONE = "+380989000000";
 const BRANCH_TAGS = ["Файна", "Севен", "Француз", "Республіка"];
 const POSTER_PRODUCT_FIELD_UUID = "CT_1008";
 const POSTER_INGREDIENTS_FIELD_UUID = "CT_1014";
+const POSTER_INCOMING_PARENT_PRODUCT_FIELD_UUID = "CT_1022";
+const POSTER_INCOMING_MODIFICATOR_FIELD_UUID = "CT_1025";
+const POSTER_INCOMING_DISH_MODIFICATION_FIELD_UUID = "CT_1026";
 
 type PosterSpot = {
   spot_id: number;
@@ -156,6 +159,31 @@ const mergeCt1014FromProductSources = (
     );
   }
   return out;
+};
+
+const getIncomingFieldRawValue = (
+  product: Order["products"][number],
+  catalogDetails: KeycrmProductDetails | undefined,
+  uuid: string,
+): unknown => {
+  const anyProduct = product as unknown as Record<string, unknown>;
+  const offer = anyProduct.offer as Record<string, unknown> | undefined;
+  const offerProduct = offer?.product as Record<string, unknown> | undefined;
+  return (
+    getCustomFieldValueByUuid(anyProduct.custom_fields, uuid) ??
+    getCustomFieldValueByUuid(offerProduct?.custom_fields, uuid) ??
+    getCustomFieldValueByUuid(catalogDetails?.custom_fields, uuid)
+  );
+};
+
+const parseFieldIds = (value: unknown): number[] => {
+  if (value == null) return [];
+  const raw = String(value).trim();
+  if (!raw) return [];
+  return raw
+    .split(/[,;|\s]+/)
+    .map((part) => getNumericIdFromUnknown(part))
+    .filter((id): id is number => id != null);
 };
 
 const getCatalogProductIdForLine = (
@@ -319,8 +347,6 @@ async function main() {
     const catalogId = getCatalogProductIdForLine(product);
     const details = catalogId ? productsDetailsMap.get(catalogId) : undefined;
     const parentId = details ? getNumericIdFromUnknown(details.parent_id) : null;
-    const parentDetails =
-      parentId != null ? productsDetailsMap.get(parentId) : undefined;
 
     const count = Number(product.quantity ?? 0);
     const modificatorFromLine = extractPosterModificatorId(product);
@@ -329,33 +355,56 @@ async function main() {
     let modification: string | undefined;
 
     const childPosterId = extractPosterIdFromDetails(details);
-    const parentPosterId = extractPosterIdFromDetails(parentDetails);
+    const incomingParentProductId = parseFieldIds(
+      getIncomingFieldRawValue(
+        product,
+        details,
+        POSTER_INCOMING_PARENT_PRODUCT_FIELD_UUID,
+      ),
+    )[0];
+    const incomingModificatorId = parseFieldIds(
+      getIncomingFieldRawValue(
+        product,
+        details,
+        POSTER_INCOMING_MODIFICATOR_FIELD_UUID,
+      ),
+    )[0];
+    const incomingDishModificationIds = parseFieldIds(
+      getIncomingFieldRawValue(
+        product,
+        details,
+        POSTER_INCOMING_DISH_MODIFICATION_FIELD_UUID,
+      ),
+    );
 
-    if (parentDetails && parentPosterId) {
-      productId = parentPosterId;
-    } else {
-      productId = extractPosterProductId(product, productsDetailsMap);
-    }
+    productId =
+      incomingParentProductId ??
+      extractPosterProductId(product, productsDetailsMap);
 
-    let techModifierIds = mergeCt1014FromProductSources(product, details);
-    if (
-      parentDetails &&
-      parentPosterId &&
-      childPosterId &&
-      childPosterId !== parentPosterId &&
-      !techModifierIds.includes(childPosterId)
-    ) {
-      techModifierIds = [...techModifierIds, childPosterId];
-    }
-    techModifierIds.sort((a, b) => a - b);
-
-    if (modificatorFromLine && productId && modificatorFromLine !== productId) {
+    if (incomingModificatorId && productId && incomingModificatorId !== productId) {
+      modificatorId = incomingModificatorId;
+    } else if (modificatorFromLine && productId && modificatorFromLine !== productId) {
       modificatorId = modificatorFromLine;
-    } else if (techModifierIds.length && productId) {
-      const qty = Math.max(1, Math.trunc(count));
-      modification = buildPosterModificationString(
-        techModifierIds.map((m) => ({ m, a: qty })),
-      );
+    } else {
+      let techModifierIds = [...incomingDishModificationIds];
+      if (!techModifierIds.length) {
+        techModifierIds = mergeCt1014FromProductSources(product, details);
+        if (
+          childPosterId &&
+          productId &&
+          childPosterId !== productId &&
+          !techModifierIds.includes(childPosterId)
+        ) {
+          techModifierIds = [...techModifierIds, childPosterId];
+        }
+      }
+      techModifierIds.sort((a, b) => a - b);
+      if (techModifierIds.length && productId) {
+        const qty = Math.max(1, Math.trunc(count));
+        modification = buildPosterModificationString(
+          techModifierIds.map((m) => ({ m, a: qty })),
+        );
+      }
     }
 
     return {
@@ -375,6 +424,21 @@ async function main() {
         anyProduct.custom_fields,
         POSTER_INGREDIENTS_FIELD_UUID,
       ),
+      ct1022_parent_product_id: getIncomingFieldRawValue(
+        product,
+        details,
+        POSTER_INCOMING_PARENT_PRODUCT_FIELD_UUID,
+      ),
+      ct1025_modificator_id: getIncomingFieldRawValue(
+        product,
+        details,
+        POSTER_INCOMING_MODIFICATOR_FIELD_UUID,
+      ),
+      ct1026_dish_modification_id: getIncomingFieldRawValue(
+        product,
+        details,
+        POSTER_INCOMING_DISH_MODIFICATION_FIELD_UUID,
+      ),
       ct1008_from_catalog_product_custom_fields: getCustomFieldValueByUuid(
         productsDetailsMap.get(
           getNumericIdFromUnknown((product.offer as { product_id?: unknown })?.product_id) ??
@@ -386,8 +450,6 @@ async function main() {
       offer_product_id: (product.offer as { product_id?: unknown })?.product_id,
       resolved_product_id_poster: productId,
       child_poster_ct1008: childPosterId,
-      parent_poster_ct1008: parentPosterId,
-      tech_modifier_ids_for_poster_m: techModifierIds,
       resolved_modificator_id: modificatorId,
       resolved_modification_json_string: modification,
       raw_properties: product.properties ?? [],
@@ -398,9 +460,6 @@ async function main() {
     .map((product) => {
       const catalogId = getCatalogProductIdForLine(product);
       const details = catalogId ? productsDetailsMap.get(catalogId) : undefined;
-      const parentId = details ? getNumericIdFromUnknown(details.parent_id) : null;
-      const parentDetails =
-        parentId != null ? productsDetailsMap.get(parentId) : undefined;
 
       const count = Number(product.quantity ?? 0);
       const modificatorFromLine = extractPosterModificatorId(product);
@@ -415,37 +474,59 @@ async function main() {
       let modification: string | undefined;
 
       const childPosterId = extractPosterIdFromDetails(details);
-      const parentPosterId = extractPosterIdFromDetails(parentDetails);
+      const incomingParentProductId = parseFieldIds(
+        getIncomingFieldRawValue(
+          product,
+          details,
+          POSTER_INCOMING_PARENT_PRODUCT_FIELD_UUID,
+        ),
+      )[0];
+      const incomingModificatorId = parseFieldIds(
+        getIncomingFieldRawValue(
+          product,
+          details,
+          POSTER_INCOMING_MODIFICATOR_FIELD_UUID,
+        ),
+      )[0];
+      const incomingDishModificationIds = parseFieldIds(
+        getIncomingFieldRawValue(
+          product,
+          details,
+          POSTER_INCOMING_DISH_MODIFICATION_FIELD_UUID,
+        ),
+      );
 
-      if (parentDetails && parentPosterId) {
-        productId = parentPosterId;
-      } else {
-        productId = extractPosterProductId(product, productsDetailsMap);
-      }
+      productId =
+        incomingParentProductId ??
+        extractPosterProductId(product, productsDetailsMap);
 
       if (!productId) {
         return null;
       }
 
-      let techModifierIds = mergeCt1014FromProductSources(product, details);
-      if (
-        parentDetails &&
-        parentPosterId &&
-        childPosterId &&
-        childPosterId !== parentPosterId &&
-        !techModifierIds.includes(childPosterId)
-      ) {
-        techModifierIds = [...techModifierIds, childPosterId];
-      }
-      techModifierIds.sort((a, b) => a - b);
-
-      if (modificatorFromLine && modificatorFromLine !== productId) {
+      if (incomingModificatorId && incomingModificatorId !== productId) {
+        modificatorId = incomingModificatorId;
+      } else if (modificatorFromLine && modificatorFromLine !== productId) {
         modificatorId = modificatorFromLine;
-      } else if (techModifierIds.length) {
-        const qty = Math.max(1, Math.trunc(count));
-        modification = buildPosterModificationString(
-          techModifierIds.map((m) => ({ m, a: qty })),
-        );
+      } else {
+        let techModifierIds = [...incomingDishModificationIds];
+        if (!techModifierIds.length) {
+          techModifierIds = mergeCt1014FromProductSources(product, details);
+          if (
+            childPosterId &&
+            childPosterId !== productId &&
+            !techModifierIds.includes(childPosterId)
+          ) {
+            techModifierIds = [...techModifierIds, childPosterId];
+          }
+        }
+        techModifierIds.sort((a, b) => a - b);
+        if (techModifierIds.length) {
+          const qty = Math.max(1, Math.trunc(count));
+          modification = buildPosterModificationString(
+            techModifierIds.map((m) => ({ m, a: qty })),
+          );
+        }
       }
 
       if (modificatorId && modificatorId === productId) {
