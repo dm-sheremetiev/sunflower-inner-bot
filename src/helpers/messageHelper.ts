@@ -63,7 +63,7 @@ const formatOrderMessage = (order: Order, posterReceipt?: string | null) => {
 
   const { giftMessage, productComment } = extractCommentsFromOrder(order);
 
-  let finalMessage = `Менеджер назначив замовлення №${id} на ${assignedPeopleNicknames}.`;
+  let finalMessage = `Менеджер назначив замовлення №${id} на ${assignedPeopleNicknames}`;
 
   if (giftMessage) {
     finalMessage += ` ${giftMessage}`;
