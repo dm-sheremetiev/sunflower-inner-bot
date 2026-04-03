@@ -620,7 +620,6 @@ export const createPosterOrdersAndStoreReceipts = async (
   const orderId = Number(order.id);
   const branches = extractOrderBranches(order, branchTags);
   if (!branches.length) {
-    reply.log.info({ orderId }, "Poster sync skipped: no branch tags");
     return null;
   }
 

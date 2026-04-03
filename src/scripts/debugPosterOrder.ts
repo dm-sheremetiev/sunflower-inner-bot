@@ -4,7 +4,10 @@ import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import timezone from "dayjs/plugin/timezone.js";
 import { keycrmApiClient } from "../api/keycrmApiClient.js";
-import { posterApiClient } from "../api/posterApiClient.js";
+import {
+  posterApiClient,
+  POSTER_API_TOKEN,
+} from "../api/posterApiClient.js";
 import type { Order } from "../types/keycrm.js";
 
 dayjs.extend(utc);
@@ -308,6 +311,39 @@ function extractBranches(order: Order): string[] {
   return [...new Set(names ?? [])];
 }
 
+const normalizeSpotName = (value: string): string =>
+  value.toLowerCase().replace(/[—–-]/g, "-").replace(/\s+/g, " ").trim();
+
+const isOnlineShopSpotName = (name: string): boolean => {
+  const n = normalizeSpotName(name);
+  return (
+    n.includes("інтернет-магазин") ||
+    n.includes("інтернет магазин") ||
+    n.includes("интернет-магазин") ||
+    n.includes("интернет магазин")
+  );
+};
+
+const getPosterOnlineShopSpotsByBranches = (
+  spots: PosterSpot[],
+  branches: string[],
+): Array<{ branchName: string; spot: PosterSpot }> => {
+  return branches
+    .map((branchName) => {
+      const branchNorm = normalizeSpotName(branchName);
+      const spot = spots.find(
+        (item) =>
+          item.spot_delete === 0 &&
+          normalizeSpotName(item.name).includes(branchNorm) &&
+          isOnlineShopSpotName(item.name),
+      );
+      return spot ? { branchName, spot } : null;
+    })
+    .filter((item): item is { branchName: string; spot: PosterSpot } =>
+      Boolean(item),
+    );
+};
+
 function buildComment(order: Order): string {
   const manager = String(order.manager_comment ?? "").trim();
   const client = String(order.buyer_comment ?? "").trim();
@@ -318,6 +354,12 @@ function buildComment(order: Order): string {
 
 async function main() {
   const { orderId, send } = parseArgs();
+  if (!String(POSTER_API_TOKEN ?? "").trim()) {
+    console.error(
+      "POSTER_API_TOKEN не задан у .env — spots.getSpots поверне порожній список, відправка неможлива.",
+    );
+    process.exit(1);
+  }
   const include =
     "custom_fields,shipping,buyer,products,products.offer,tags,manager,payments,assigned";
   const { data: order } = await keycrmApiClient.get<Order>(
@@ -330,15 +372,11 @@ async function main() {
     "/spots.getSpots",
   );
   const spots = spotsRes.response ?? [];
-  const onlineShops = (spotsRes.response ?? []).filter(
-    (spot) =>
-      spot.spot_delete === 0 &&
-      (spot.name.toLowerCase().includes("інтернет-магазин") ||
-        spot.name.toLowerCase().includes("інтернет магазин")),
+  const onlineShops = spots.filter(
+    (spot) => spot.spot_delete === 0 && isOnlineShopSpotName(spot.name),
   );
-  const matchedSpots = onlineShops.filter((spot) =>
-    branches.some((branch) => spot.name.toLowerCase().includes(branch.toLowerCase())),
-  );
+  const branchSpotPairs = getPosterOnlineShopSpotsByBranches(spots, branches);
+  const matchedSpots = branchSpotPairs.map((p) => p.spot);
 
   const productsPreview = (order.products ?? []).map((product) => {
     const anyProduct = product as unknown as Record<string, unknown>;
@@ -566,7 +604,17 @@ async function main() {
         spotsCount: spots.length,
         onlineShopsCount: onlineShops.length,
         onlineShopSpotNames: onlineShops.map((s) => s.name),
-        matchedSpots,
+        matchedSpotsCount: matchedSpots.length,
+        matchedSpotsPreview: branchSpotPairs.map((p) => ({
+          branchName: p.branchName,
+          spot_id: p.spot.spot_id,
+          name: p.spot.name,
+        })),
+        spotsApiRawHint:
+          spots.length === 0
+            ? "Сирий відповідь spots.getSpots (перевірте token / обліковий запис): якщо порожньо — подивіться error у відповіді API у мережі"
+            : undefined,
+        spotsResponseSnippet: spots.length === 0 ? spotsRes : undefined,
       },
       null,
       2,
@@ -585,9 +633,20 @@ async function main() {
   }
 
   if (!products.length || !matchedSpots.length) {
-    console.log(
-      "\nCannot send: no mapped products or no matched online-shop spots.",
-    );
+    console.log("\nCannot send:");
+    if (!products.length) {
+      console.log(
+        "- products порожній: перевірте CT_1022 / маппінг рядків замовлення.",
+      );
+    }
+    if (!matchedSpots.length) {
+      console.log(
+        "- немає matched online-shop spots: перевірте теги філій у замовленні, назви точок Poster та POSTER_API_TOKEN.",
+      );
+      console.log(
+        `  branches=${JSON.stringify(branches)}, spotsCount=${spots.length}, onlineShopsCount=${onlineShops.length}`,
+      );
+    }
     return;
   }
 
