@@ -50,6 +50,12 @@ type PosterReceiptRecord = {
   transactionId: number;
 };
 
+type PosterApiLikePayload = {
+  response?: {
+    transaction_id?: unknown;
+  };
+};
+
 type KeycrmCustomField = {
   id?: number;
   uuid?: string;
@@ -141,13 +147,16 @@ const findPosterReceiptField = (
     );
   });
 
+/** OR_1018 завжди повністю замінюється на рядок з поточного синку Poster (без злиття зі старим value у заявці). */
 const updatePosterReceiptInCrm = async (
   orderId: number,
-  order: Order,
   receiptValue: string,
 ) => {
+  const { data: freshOrder } = await keycrmApiClient.get<Order>(
+    `order/${orderId}?include=custom_fields`,
+  );
   const receiptField = findPosterReceiptField(
-    order.custom_fields as KeycrmCustomField[],
+    freshOrder?.custom_fields as KeycrmCustomField[],
   );
   const customFieldPayload = receiptField?.id
     ? [{ id: receiptField.id, value: receiptValue }]
@@ -295,6 +304,14 @@ const summarizeAxiosErrorForLog = (error: unknown): Record<string, unknown> => {
     baseURL: cfg?.baseURL,
     requestData,
   };
+};
+
+const extractPosterTransactionId = (payload: unknown): number | null => {
+  if (!payload || typeof payload !== "object") return null;
+  const transactionIdRaw = (payload as PosterApiLikePayload)?.response?.transaction_id;
+  const transactionId = Number(transactionIdRaw);
+  if (!Number.isFinite(transactionId) || transactionId <= 0) return null;
+  return Math.trunc(transactionId);
 };
 
 const getCustomFieldValueByUuid = (
@@ -537,9 +554,12 @@ export const createPosterOrdersAndStoreReceipts = async (
           `/incomingOrders.createIncomingOrder`,
           payload,
         );
+        console.log("POSTER DATA", data)
 
-      const transactionId = Number(data?.response?.transaction_id);
-      if (!Number.isFinite(transactionId) || transactionId <= 0) {
+
+
+      const transactionId = extractPosterTransactionId(data);
+      if (!transactionId) {
         reply.log.error(
           { orderId, branchName, spotId: spot.spot_id, response: data },
           "Poster sync failed: invalid transaction_id",
@@ -549,6 +569,23 @@ export const createPosterOrdersAndStoreReceipts = async (
 
       receipts.push({ branchName, transactionId });
     } catch (error) {
+      const transactionIdFromError = axios.isAxiosError(error)
+        ? extractPosterTransactionId(error.response?.data)
+        : null;
+      if (transactionIdFromError) {
+        receipts.push({ branchName, transactionId: transactionIdFromError });
+        reply.log.warn(
+          {
+            orderId,
+            branchName,
+            spotId: spot.spot_id,
+            transactionId: transactionIdFromError,
+            posterRequest: summarizeAxiosErrorForLog(error),
+          },
+          "Poster returned error but transaction_id was extracted from error response",
+        );
+        continue;
+      }
       reply.log.error(
         {
           orderId,
@@ -565,7 +602,7 @@ export const createPosterOrdersAndStoreReceipts = async (
 
   const receiptValue = formatPosterReceiptsText(receipts);
   try {
-    await updatePosterReceiptInCrm(orderId, order, receiptValue);
+    await updatePosterReceiptInCrm(orderId, receiptValue);
     return receiptValue;
   } catch (error) {
     reply.log.error(
