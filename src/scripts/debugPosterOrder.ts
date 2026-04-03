@@ -547,18 +547,10 @@ async function main() {
   const phone = normalizePosterPhone(
     order.shipping?.recipient_phone || order.buyer?.phone,
   );
-  const address = [
-    order.shipping?.shipping_address_city,
-    order.shipping?.shipping_receive_point,
-    order.shipping?.shipping_secondary_line,
-  ]
-    .filter((item) => typeof item === "string" && item.trim().length > 0)
-    .join(", ");
   const delivery_time = getPosterDeliveryTime(order);
   const basePayload = {
     first_name: order.shipping?.recipient_full_name || phone,
     phone,
-    address,
     comment: buildComment(order),
     delivery_time,
     skip_phone_validation: true,

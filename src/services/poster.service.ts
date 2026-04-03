@@ -638,13 +638,13 @@ export const createPosterOrdersAndStoreReceipts = async (
     order.shipping?.recipient_phone || order.buyer?.phone,
   );
   const deliveryTime = getPosterDeliveryTime(order);
-  const address = [
-    order.shipping?.shipping_address_city,
-    order.shipping?.shipping_receive_point,
-    order.shipping?.shipping_secondary_line,
-  ]
-    .filter((item) => typeof item === "string" && item.trim().length > 0)
-    .join(", ");
+  // const address = [
+  //   order.shipping?.shipping_address_city,
+  //   order.shipping?.shipping_receive_point,
+  //   order.shipping?.shipping_secondary_line,
+  // ]
+  //   .filter((item) => typeof item === "string" && item.trim().length > 0)
+  //   .join(", ");
 
   const products = await mapOrderProductsToPosterProducts(order, reply);
   if (!products.length) {
@@ -664,7 +664,7 @@ export const createPosterOrdersAndStoreReceipts = async (
         spot_id: spot.spot_id,
         first_name: order.shipping?.recipient_full_name || phone,
         phone,
-        address,
+        // address,
         comment,
         delivery_time: deliveryTime,
         skip_phone_validation: true,
