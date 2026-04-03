@@ -4,10 +4,8 @@ import path from "path";
 import { TelegramUserDatabase } from "../types/telegram.js";
 
 const legacyFilePath = path.resolve(process.cwd(), "users.json");
-const usersDbPath = path.resolve(
-  process.cwd(),
-  process.env.USERS_DB_PATH || "data/users.json",
-);
+/** Персистентный каталог — корень ФС контейнера/хоста (не /app). Переопределение: USERS_DB_PATH */
+const usersDbPath = process.env.USERS_DB_PATH || "/users.json";
 
 const ensureUsersDbDir = () => {
   const dirPath = path.dirname(usersDbPath);
@@ -20,6 +18,12 @@ const ensureUsersDbDir = () => {
 const loadUsers = () => {
   if (fs.existsSync(usersDbPath)) {
     const data = fs.readFileSync(usersDbPath, "utf-8");
+    return JSON.parse(data);
+  }
+  // Дополнительный fallback для локального запуска вне контейнера.
+  const localDataPath = path.resolve(process.cwd(), "data/users.json");
+  if (fs.existsSync(localDataPath)) {
+    const data = fs.readFileSync(localDataPath, "utf-8");
     return JSON.parse(data);
   }
   // Мягкая миграция для старого расположения в корне проекта.
