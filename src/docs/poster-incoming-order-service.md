@@ -19,8 +19,7 @@
 
 - `OR_1018` (`POSTER_RECEIPT_FIELD_UUID`) — поле заказа для сохранения номера чека Poster.
 - `OR_1006` (`DELIVERY_TIME_FIELD_UUID`) — поле интервала времени доставки.
-- `CT_1008` (`POSTER_PRODUCT_FIELD_UUID`) — entity id Poster (product/modificator/dish_modification), используется в fallback incoming-order и в процессах синхронизации остатков.
-- `CT_1014` (`POSTER_INGREDIENTS_FIELD_UUID`) — ingredient ids, используется в fallback incoming-order и в процессах синхронизации состава/остатков.
+- `CT_1008` / `CT_1014` — соответствия Poster и состав для **других** потоков (остатки, синхронизация каталога). В **incomingOrders.createIncomingOrder** не участвуют.
 - `CT_1022` (`POSTER_INCOMING_PARENT_PRODUCT_FIELD_UUID`) — основной `product_id` для incoming order.
 - `CT_1025` (`POSTER_INCOMING_MODIFICATOR_FIELD_UUID`) — основной `modificator_id` для incoming order.
 - `CT_1026` (`POSTER_INCOMING_DISH_MODIFICATION_FIELD_UUID`) — основной `dish_modification_id` для incoming order (`m` в `modification`).
@@ -49,7 +48,7 @@
 4. Матчинг филиалов на online-shop точки: `getPosterOnlineShopSpotsByBranches(...)`.
 5. Если подходящих точек нет -> `error` лог и `return null`.
 6. Нормализация контактов:
-   - телефон: `normalizePosterPhone(order.shipping?.recipient_phone || order.buyer?.phone)`,
+   - телефон: `normalizePosterPhone(order.buyer?.phone)` (телефон отримувача з доставки не використовується),
    - время: `getPosterDeliveryTime(order)`.
    - `address` в текущем payload не отправляется (опционален для API Poster).
 7. Маппинг товаров: `mapOrderProductsToPosterProducts(order, reply)`.
@@ -132,37 +131,28 @@
 - загружается `GET products/{catalogId}?include=custom_fields`,
 - дополнительно догружается один уровень родителя (`parent_id`) для уже загруженных карточек.
 
-### 6.2 Источники ID из custom fields (приоритет)
+### 6.2 Источники ID из custom fields
 
-Для каждой строки заказа:
+Для каждой строки заказа (поиск значения в том же порядке: `product.custom_fields` → `offer.product.custom_fields` → карточка каталога):
 
-1. `incomingParentProductId` <- `CT_1022` (из product.custom_fields -> offer.product.custom_fields -> catalog custom_fields).
-2. `incomingModificatorId` <- `CT_1025` (тот же порядок источников).
-3. `incomingDishModificationIds` <- `CT_1026` (поддерживается несколько id через разделители).
+1. `incomingParentProductId` <- `CT_1022`.
+2. `incomingModificatorId` <- `CT_1025`.
+3. `incomingDishModificationIds` <- `CT_1026` (несколько id через разделители).
 
-`product_id` выбирается так:
-
-- `CT_1022` (если есть),
-- иначе fallback `extractPosterProductId(...)`:
-  - `CT_1008` из product.custom_fields,
-  - затем `CT_1008` из offer.product.custom_fields,
-  - затем `CT_1008` из catalog карточки,
-  - затем `offer.product_id`.
+`product_id` в payload Poster **только** из `CT_1022`. Если в строке нет валидного `CT_1022`, строка отбрасывается.
 
 ### 6.3 Выбор между `modificator_id` и `modification`
 
-Логика взаимоисключающая:
+Взаимоисключающе:
 
-1. Если есть `CT_1025` и `CT_1025 !== product_id` -> ставится `modificator_id`.
-2. Иначе если найден `modificatorFromLine` (поле `modificator_id` строки или `properties` с именем, содержащим `modificator`/`модиф`) -> ставится `modificator_id`.
-3. Иначе пробуем `modification`:
-   - сначала из `CT_1026`,
-   - если `CT_1026` пусто -> fallback на legacy:
-     - ids из `CT_1014`,
-     - плюс `childPosterId` (`CT_1008` карточки), если отличается от `product_id`.
-   - ids сортируются по возрастанию,
-   - формируется JSON-строка вида `[{ "m": id, "a": qty }, ...]`,
+1. Если есть `CT_1025` и `CT_1025 !== product_id` -> `modificator_id`.
+2. Иначе если в `CT_1026` есть id -> `modification`:
+   - id сортируются по возрастанию,
+   - JSON-строка `[{ "m": id, "a": qty }, ...]`,
    - `qty = max(1, trunc(count))`.
+3. Иначе позиция уходит **как простой товар** (`product_id` + `count`, без `modificator_id` и без `modification`).
+
+Никаких fallback из `CT_1008`, `CT_1014`, полей строки заказа и `properties`.
 
 Дополнительная защита:
 
