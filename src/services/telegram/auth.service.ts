@@ -1,4 +1,4 @@
-import { isCourierCrmRole } from "../../helpers/crmRoleHelper.js";
+import { isCourierRoleId } from "../../helpers/crmRoleHelper.js";
 import { fileHelper } from "../../helpers/fileHelper.js";
 import { fetchActiveCrmUsers } from "../../helpers/keycrmHelper.js";
 import { normalizePhone } from "../../helpers/utils.js";
@@ -12,7 +12,6 @@ type CrmUser = {
   phone?: string | null;
   full_name?: string | null;
   role_id?: number;
-  role?: { name?: string } | null;
 };
 
 export const isUserAuthenticated = (chatId: number): { isAuth: boolean; user?: TelegramUserData } => {
@@ -71,7 +70,7 @@ export const processAuthentication = async (
         added_at: new Date().toISOString(),
         crmUserId: crmUser.id,
         crmRoleId: crmUser.role_id,
-        isCourier: isCourierCrmRole(crmUser.role),
+        isCourier: isCourierRoleId(crmUser.role_id),
         isAuthenticated: true,
         lastCheckedAt: Date.now(),
       };
@@ -122,7 +121,7 @@ export const verifyUserAccess = async (chatId: number): Promise<{ isValid: boole
       if (typeof matched.role_id === "number") {
         user.crmRoleId = matched.role_id;
       }
-      user.isCourier = isCourierCrmRole(matched.role);
+      user.isCourier = isCourierRoleId(matched.role_id);
 
       user.lastCheckedAt = now;
       fileHelper.saveUsers(users);

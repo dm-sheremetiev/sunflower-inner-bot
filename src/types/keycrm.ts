@@ -280,7 +280,8 @@ export interface Assigned {
   username: string;
   email: string;
   phone: string;
-  role: Role;
+  role_id?: number;
+  role?: Role;
   status: string;
   created_at: string;
   updated_at: string;
