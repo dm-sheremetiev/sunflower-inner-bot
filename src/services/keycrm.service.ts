@@ -14,7 +14,6 @@ import {
 } from "../helpers/messageHelper.js";
 import { fileHelper } from "../helpers/fileHelper.js";
 import {
-  isCourier,
   sendTelegramMessage,
   sendTelegramMessageToMainAccount,
   sendTelegramMessageToNotificationsChanel,
@@ -24,6 +23,7 @@ import { StorageUploadResponse } from "../types/keycrm.js";
 import { createPosterOrdersAndStoreReceipts } from "./poster.service.js";
 
 import "dotenv/config";
+import { isCourierCrmRole } from "../helpers/crmRoleHelper.js";
 import { extractBranchNames } from "../helpers/keycrmHelper.js";
 
 dayjs.extend(utc);
@@ -68,7 +68,7 @@ export interface TagResponse {
 const getOrderInfo = async (orderId: string | number, reply: FastifyReply) => {
   try {
     const res = await keycrmApiClient.get<Order>(
-      `order/${+orderId}?include=assigned,custom_fields,shipping.deliveryService,buyer,manager,products,products.offer,tags,payments`,
+      `order/${+orderId}?include=assigned,assigned.role,custom_fields,shipping.deliveryService,buyer,manager,products,products.offer,tags,payments`,
     );
 
     return res?.data;
@@ -175,7 +175,7 @@ export const sendWithoutPackageMessageToManager = async (
 
     if (assigned?.length) {
       const assignedPeople = assigned
-        .filter((as) => !isCourier(as.username))
+        .filter((as) => !isCourierCrmRole(as.role))
         .map((as) => as.full_name)
         .join(", ");
 
@@ -274,7 +274,7 @@ export const sendMessageAboutPackage = async (
     }
 
     const filteredAssigned = assigned.filter(
-      (as) => !isCourier(as?.username?.toLowerCase()),
+      (as) => !isCourierCrmRole(as.role),
     );
     const { giftMessage, productComment } = extractCommentsFromOrder(order);
 
@@ -337,7 +337,7 @@ export const sendPackedMessageNotification = async (
 
     if (assigned?.length) {
       const assignedPeople = assigned
-        .filter((as) => !isCourier(as.username))
+        .filter((as) => !isCourierCrmRole(as.role))
         .map((as) => as.full_name)
         .join(", ");
 

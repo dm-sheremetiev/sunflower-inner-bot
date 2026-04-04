@@ -5,7 +5,8 @@ import { fetchActiveCrmUsers, fetchAllOrders } from "../../helpers/keycrmHelper.
 import { keycrmApiClient } from "../../api/keycrmApiClient.js";
 import type { Order } from "../../types/keycrm.js";
 import { normalizePhone } from "../../helpers/utils.js";
-import { isCourier, isFloristRole } from "./config.js";
+import { isFloristRole } from "./config.js";
+import { isCourierCrmRole } from "../../helpers/crmRoleHelper.js";
 
 /** Група статусів «доставка» в KeyCRM — такі замовлення не показуємо флористам у списку. */
 const DELIVERY_STATUS_GROUP_ID = 4;
@@ -79,14 +80,22 @@ export async function getUserOrdersSummary(
   const crmUser = users[chatId];
   if (!crmUser) return [];
 
-  if (crmUser.crmRoleId == null && crmUser.crmUserId != null) {
+  if (
+    crmUser.crmUserId != null &&
+    (crmUser.crmRoleId == null || crmUser.isCourier === undefined)
+  ) {
     try {
       const crmUsers = await fetchActiveCrmUsers();
-      const match = (crmUsers as { id: number; role_id?: number }[]).find(
-        (u) => u.id === crmUser.crmUserId,
-      );
-      if (match && typeof match.role_id === "number") {
-        crmUser.crmRoleId = match.role_id;
+      const match = (crmUsers as {
+        id: number;
+        role_id?: number;
+        role?: { name?: string } | null;
+      }[]).find((u) => u.id === crmUser.crmUserId);
+      if (match) {
+        if (typeof match.role_id === "number") {
+          crmUser.crmRoleId = match.role_id;
+        }
+        crmUser.isCourier = isCourierCrmRole(match.role);
         users[chatId] = crmUser;
         fileHelper.saveUsers(users);
       }
@@ -104,8 +113,7 @@ export async function getUserOrdersSummary(
 
   const orders = await fetchAllOrders(shippingBetween);
   let filtered = orders.filter((o) => matchesCrmUser(o, crmUser));
-  const username = crmUser.username ?? "";
-  if (isFloristRole(crmUser.crmRoleId) && !isCourier(username)) {
+  if (isFloristRole(crmUser.crmRoleId) && crmUser.isCourier !== true) {
     filtered = filtered.filter(orderVisibleInFloristList);
   }
 

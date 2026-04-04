@@ -70,6 +70,7 @@ export const fetchActiveCrmUsers = async () => {
           limit,
           page,
           "filter[status]": "active",
+          include: "role",
         },
       });
 
