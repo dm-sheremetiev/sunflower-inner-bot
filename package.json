@@ -7,12 +7,13 @@
   "license": "ISC",
   "type": "module",
   "scripts": {
-    "build": "tsc && tsc-alias",
+    "build": "node scripts/usersJsonBuild.mjs pre && tsc && tsc-alias && node scripts/usersJsonBuild.mjs post",
     "start": "node dist/server.js",
     "start:watch": "nodemon",
     "dev": "nodemon src/server.ts",
     "start-server": "pm2 stop dist/server.js && git pull && npm run build && pm2 start dist/server.js",
-    "debug:poster:order": "tsx src/scripts/debugPosterOrder.ts"
+    "debug:poster:order": "tsx src/scripts/debugPosterOrder.ts",
+    "send:x-report-reminder": "tsx src/scripts/sendXReportReminder.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.0.1",
