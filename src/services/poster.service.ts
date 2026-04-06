@@ -188,6 +188,17 @@ const isOnlineShopSpotName = (name: string): boolean => {
   );
 };
 
+// TEMP: у філіала "Француз" тимчасово не працює інтернет-магазин у Poster.
+// Щоб прибрати, видаліть цю константу та блок у getPosterOnlineShopSpotsByBranches.
+const TEMP_BRANCHES_FORCE_REGULAR_SPOT = ["француз"];
+
+const shouldForceRegularSpotForBranch = (branchName: string): boolean => {
+  const branchNorm = normalizeSpotName(branchName);
+  return TEMP_BRANCHES_FORCE_REGULAR_SPOT.some((name) =>
+    branchNorm.includes(name),
+  );
+};
+
 const getPosterOnlineShopSpotsByBranches = (
   spots: PosterSpot[],
   branches: string[],
@@ -195,6 +206,17 @@ const getPosterOnlineShopSpotsByBranches = (
   return branches
     .map((branchName) => {
       const branchNorm = normalizeSpotName(branchName);
+
+      if (shouldForceRegularSpotForBranch(branchName)) {
+        const forcedRegularSpot = spots.find(
+          (item) =>
+            item.spot_delete === 0 &&
+            normalizeSpotName(item.name).includes(branchNorm) &&
+            !isOnlineShopSpotName(item.name),
+        );
+        return forcedRegularSpot ? { branchName, spot: forcedRegularSpot } : null;
+      }
+
       const spot = spots.find(
         (item) =>
           item.spot_delete === 0 &&
@@ -207,6 +229,22 @@ const getPosterOnlineShopSpotsByBranches = (
     .filter((item): item is { branchName: string; spot: PosterSpot } =>
       Boolean(item),
     );
+};
+
+const getPosterRegularSpotByBranch = (
+  spots: PosterSpot[],
+  branchName: string,
+  excludeSpotId?: number,
+): PosterSpot | null => {
+  const branchNorm = normalizeSpotName(branchName);
+  const spot = spots.find(
+    (item) =>
+      item.spot_delete === 0 &&
+      (excludeSpotId == null || item.spot_id !== excludeSpotId) &&
+      normalizeSpotName(item.name).includes(branchNorm) &&
+      !isOnlineShopSpotName(item.name),
+  );
+  return spot ?? null;
 };
 
 const buildPosterComment = (order: Order): string => {
@@ -308,7 +346,8 @@ const summarizeAxiosErrorForLog = (error: unknown): Record<string, unknown> => {
 
 const extractPosterTransactionId = (payload: unknown): number | null => {
   if (!payload || typeof payload !== "object") return null;
-  const transactionIdRaw = (payload as PosterApiLikePayload)?.response?.transaction_id;
+  const transactionIdRaw = (payload as PosterApiLikePayload)?.response
+    ?.transaction_id;
   const transactionId = Number(transactionIdRaw);
   if (!Number.isFinite(transactionId) || transactionId <= 0) return null;
   return Math.trunc(transactionId);
@@ -379,9 +418,7 @@ const fetchOrderProductsDetailsMap = async (
   return map;
 };
 
-const getCatalogProductIdForLine = (
-  product: OrderProduct,
-): number | null => {
+const getCatalogProductIdForLine = (product: OrderProduct): number | null => {
   const productMeta = asOrderProductWithMeta(product);
   const offerProductId = getNumericIdFromUnknown(product.offer?.product_id);
   const fallbackProductId = getNumericIdFromUnknown(productMeta.id);
@@ -537,16 +574,20 @@ export const createPosterOrdersAndStoreReceipts = async (
   const receipts: PosterReceiptRecord[] = [];
 
   for (const { branchName, spot } of branchSpots) {
+    const payloadBase = {
+      first_name: order.shipping?.recipient_full_name || phone,
+      phone,
+      // address,
+      comment,
+      delivery_time: deliveryTime,
+      skip_phone_validation: true,
+      products,
+    };
+
     try {
       const payload = {
         spot_id: spot.spot_id,
-        first_name: order.shipping?.recipient_full_name || phone,
-        phone,
-        // address,
-        comment,
-        delivery_time: deliveryTime,
-        skip_phone_validation: true,
-        products,
+        ...payloadBase,
       };
 
       const { data } =
@@ -554,9 +595,7 @@ export const createPosterOrdersAndStoreReceipts = async (
           `/incomingOrders.createIncomingOrder`,
           payload,
         );
-        console.log("POSTER DATA", data)
-
-
+      console.log("POSTER DATA", data);
 
       const transactionId = extractPosterTransactionId(data);
       if (!transactionId) {
@@ -595,6 +634,87 @@ export const createPosterOrdersAndStoreReceipts = async (
         },
         "Poster sync failed while creating incoming order",
       );
+
+      const fallbackSpot = getPosterRegularSpotByBranch(
+        spots,
+        branchName,
+        spot.spot_id,
+      );
+      if (!fallbackSpot) {
+        continue;
+      }
+
+      try {
+        const fallbackPayload = {
+          spot_id: fallbackSpot.spot_id,
+          ...payloadBase,
+        };
+
+        const { data: fallbackData } =
+          await posterApiClient.post<PosterCreateIncomingOrderResponse>(
+            `/incomingOrders.createIncomingOrder`,
+            fallbackPayload,
+          );
+
+        const fallbackTransactionId = extractPosterTransactionId(fallbackData);
+        if (!fallbackTransactionId) {
+          reply.log.error(
+            {
+              orderId,
+              branchName,
+              primarySpotId: spot.spot_id,
+              fallbackSpotId: fallbackSpot.spot_id,
+              response: fallbackData,
+            },
+            "Poster fallback failed: invalid transaction_id",
+          );
+          continue;
+        }
+
+        receipts.push({ branchName, transactionId: fallbackTransactionId });
+        reply.log.warn(
+          {
+            orderId,
+            branchName,
+            primarySpotId: spot.spot_id,
+            fallbackSpotId: fallbackSpot.spot_id,
+          },
+          "Poster fallback succeeded: order sent to regular branch spot",
+        );
+      } catch (fallbackError) {
+        const fallbackTransactionIdFromError = axios.isAxiosError(fallbackError)
+          ? extractPosterTransactionId(fallbackError.response?.data)
+          : null;
+
+        if (fallbackTransactionIdFromError) {
+          receipts.push({
+            branchName,
+            transactionId: fallbackTransactionIdFromError,
+          });
+          reply.log.warn(
+            {
+              orderId,
+              branchName,
+              primarySpotId: spot.spot_id,
+              fallbackSpotId: fallbackSpot.spot_id,
+              transactionId: fallbackTransactionIdFromError,
+              posterRequest: summarizeAxiosErrorForLog(fallbackError),
+            },
+            "Poster fallback returned error but transaction_id was extracted",
+          );
+          continue;
+        }
+        reply.log.error(
+          {
+            orderId,
+            branchName,
+            primarySpotId: spot.spot_id,
+            fallbackSpotId: fallbackSpot.spot_id,
+            posterRequest: summarizeAxiosErrorForLog(fallbackError),
+          },
+          "Poster fallback failed while creating incoming order",
+        );
+      }
     }
   }
 
