@@ -248,9 +248,13 @@ const getPosterRegularSpotByBranch = (
 };
 
 const buildPosterComment = (order: Order): string => {
+  const crmOrderId = Number(order.id);
+  const crmOrderNumber = Number.isFinite(crmOrderId) && crmOrderId > 0
+    ? Math.trunc(crmOrderId).toString().padStart(4, "0")
+    : String(order.id ?? "").trim();
   const managerComment = String(order.manager_comment ?? "").trim();
   const clientComment = String(order.buyer_comment ?? "").trim();
-  const parts: string[] = [];
+  const parts: string[] = [`СРМ №${crmOrderNumber}`];
 
   if (managerComment) {
     parts.push(`Коментар менеджера: ${managerComment}`);
