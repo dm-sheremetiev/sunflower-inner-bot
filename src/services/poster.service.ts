@@ -214,7 +214,9 @@ const getPosterOnlineShopSpotsByBranches = (
             normalizeSpotName(item.name).includes(branchNorm) &&
             !isOnlineShopSpotName(item.name),
         );
-        return forcedRegularSpot ? { branchName, spot: forcedRegularSpot } : null;
+        return forcedRegularSpot
+          ? { branchName, spot: forcedRegularSpot }
+          : null;
       }
 
       const spot = spots.find(
@@ -249,19 +251,21 @@ const getPosterRegularSpotByBranch = (
 
 const buildPosterComment = (order: Order): string => {
   const crmOrderId = Number(order.id);
-  const crmOrderNumber = Number.isFinite(crmOrderId) && crmOrderId > 0
-    ? Math.trunc(crmOrderId).toString().padStart(4, "0")
-    : String(order.id ?? "").trim();
-  const managerComment = String(order.manager_comment ?? "").trim();
-  const clientComment = String(order.buyer_comment ?? "").trim();
+  const crmOrderNumber =
+    Number.isFinite(crmOrderId) && crmOrderId > 0
+      ? Math.trunc(crmOrderId).toString().padStart(4, "0")
+      : String(order.id ?? "").trim();
   const parts: string[] = [`СРМ №${crmOrderNumber}`];
 
-  if (managerComment) {
-    parts.push(`Коментар менеджера: ${managerComment}`);
-  }
-  if (clientComment) {
-    parts.push(`Коментар клієнта: ${clientComment}`);
-  }
+  // const managerComment = String(order.manager_comment ?? "").trim();
+  // const clientComment = String(order.buyer_comment ?? "").trim();
+
+  // if (managerComment) {
+  //   parts.push(`Коментар менеджера: ${managerComment}`);
+  // }
+  // if (clientComment) {
+  //   parts.push(`Коментар клієнта: ${clientComment}`);
+  // }
 
   return parts.join(" | ");
 };
