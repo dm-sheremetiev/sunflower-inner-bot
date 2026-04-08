@@ -97,6 +97,27 @@ const normalizePosterPhone = (value: string | null | undefined): string => {
   return `+${cleaned}`;
 };
 
+type PosterBuyerIdentity = {
+  firstName?: string;
+  email?: string;
+};
+
+const getPosterBuyerIdentity = (order: Order): PosterBuyerIdentity => {
+  const fullName = String(order.buyer?.full_name ?? "").trim();
+  const email = String(order.buyer?.email ?? "").trim();
+  const orderId = Number(order.id);
+  const crmOrderNumber =
+    Number.isFinite(orderId) && orderId > 0
+      ? Math.trunc(orderId).toString()
+      : String(order.id ?? "").trim();
+  const fallbackFirstName = `Клієнт з номеру замовлення ${crmOrderNumber}`;
+
+  return {
+    firstName: fullName || fallbackFirstName,
+    email: email || undefined,
+  };
+};
+
 const getDeliveryTimeRangeStart = (order: Order): string | null => {
   const timeField = order.custom_fields?.find((field) => {
     const name = String(field.name ?? "").toLowerCase();
@@ -253,7 +274,7 @@ const buildPosterComment = (order: Order): string => {
   const crmOrderId = Number(order.id);
   const crmOrderNumber =
     Number.isFinite(crmOrderId) && crmOrderId > 0
-      ? Math.trunc(crmOrderId).toString().padStart(4, "0")
+      ? Math.trunc(crmOrderId).toString()
       : String(order.id ?? "").trim();
   const parts: string[] = [`СРМ №${crmOrderNumber}`];
 
@@ -560,6 +581,7 @@ export const createPosterOrdersAndStoreReceipts = async (
   }
 
   const phone = normalizePosterPhone(order.buyer?.phone);
+  const buyerIdentity = getPosterBuyerIdentity(order);
   const deliveryTime = getPosterDeliveryTime(order);
   // const address = [
   //   order.shipping?.shipping_address_city,
@@ -583,7 +605,9 @@ export const createPosterOrdersAndStoreReceipts = async (
 
   for (const { branchName, spot } of branchSpots) {
     const payloadBase = {
-      first_name: order.shipping?.recipient_full_name || phone,
+      first_name:
+        buyerIdentity.firstName || order.shipping?.recipient_full_name || phone,
+      ...(buyerIdentity.email ? { email: buyerIdentity.email } : {}),
       phone,
       // address,
       comment,
