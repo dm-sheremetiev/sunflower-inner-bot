@@ -211,9 +211,9 @@ const isOnlineShopSpotName = (name: string): boolean => {
 
 // TEMP: у філіала "Француз" тимчасово не працює інтернет-магазин у Poster.
 // Щоб прибрати, видаліть цю константу та блок у getPosterOnlineShopSpotsByBranches.
-const TEMP_BRANCHES_FORCE_REGULAR_SPOT = ["француз"];
+const TEMP_BRANCHES_FORCE_REGULAR_SPOT = [];
 
-const shouldForceRegularSpotForBranch = (branchName: string): boolean => {
+export const shouldForceRegularSpotForBranch = (branchName: string): boolean => {
   const branchNorm = normalizeSpotName(branchName);
   return TEMP_BRANCHES_FORCE_REGULAR_SPOT.some((name) =>
     branchNorm.includes(name),
@@ -228,17 +228,17 @@ const getPosterOnlineShopSpotsByBranches = (
     .map((branchName) => {
       const branchNorm = normalizeSpotName(branchName);
 
-      if (shouldForceRegularSpotForBranch(branchName)) {
-        const forcedRegularSpot = spots.find(
-          (item) =>
-            item.spot_delete === 0 &&
-            normalizeSpotName(item.name).includes(branchNorm) &&
-            !isOnlineShopSpotName(item.name),
-        );
-        return forcedRegularSpot
-          ? { branchName, spot: forcedRegularSpot }
-          : null;
-      }
+      // if (shouldForceRegularSpotForBranch(branchName)) {
+      //   const forcedRegularSpot = spots.find(
+      //     (item) =>
+      //       item.spot_delete === 0 &&
+      //       normalizeSpotName(item.name).includes(branchNorm) &&
+      //       !isOnlineShopSpotName(item.name),
+      //   );
+      //   return forcedRegularSpot
+      //     ? { branchName, spot: forcedRegularSpot }
+      //     : null;
+      // }
 
       const spot = spots.find(
         (item) =>
