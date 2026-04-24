@@ -73,6 +73,18 @@ type OrderProductWithMeta = OrderProduct & {
   };
 };
 
+const hasSelfPickupTag = (order: Order): boolean =>
+  order.tags?.some((tag) =>
+    (tag.name ?? "").toLowerCase().includes("самовивіз"),
+  ) ?? false;
+
+const getPosterDeliveryPriceKopecks = (order: Order): number => {
+  const raw = order.shipping_price;
+  const uah = typeof raw === "number" ? raw : Number(String(raw ?? "").trim());
+  if (!Number.isFinite(uah) || uah <= 0) return 0;
+  return Math.round(uah * 100);
+};
+
 const extractOrderBranches = (order: Order, branchTags: string[]): string[] => {
   const byTags =
     order.tags
@@ -601,6 +613,9 @@ export const createPosterOrdersAndStoreReceipts = async (
   }
 
   const comment = buildPosterComment(order);
+  const deliveryPriceKopecks = getPosterDeliveryPriceKopecks(order);
+  const includeDeliveryFields =
+    !hasSelfPickupTag(order) && deliveryPriceKopecks > 0;
   const receipts: PosterReceiptRecord[] = [];
 
   for (const { branchName, spot } of branchSpots) {
@@ -613,6 +628,9 @@ export const createPosterOrdersAndStoreReceipts = async (
       comment,
       delivery_time: deliveryTime,
       skip_phone_validation: true,
+      ...(includeDeliveryFields
+        ? { service_mode: 3, delivery_price: deliveryPriceKopecks }
+        : {}),
       products,
     };
 
