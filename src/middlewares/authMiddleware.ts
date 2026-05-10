@@ -12,6 +12,8 @@ export const authMiddleware = async (
   // React only in direct chats with the bot.
   if (ctx.chat && ctx.chat.type !== "private") return;
 
+  if (process.env.DISABLE_AUTH === "true") return next();
+
   const chatId = ctx.from?.id;
   if (!chatId) return next();
 
