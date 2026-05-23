@@ -221,9 +221,15 @@ const isOnlineShopSpotName = (name: string): boolean => {
   );
 };
 
-// TEMP: у філіала "Француз" тимчасово не працює інтернет-магазин у Poster.
-// Щоб прибрати, видаліть цю константу та блок у getPosterOnlineShopSpotsByBranches.
-const TEMP_BRANCHES_FORCE_REGULAR_SPOT = [];
+// TEMP: для філій, де тимчасово не працює інтернет-магазин у Poster,
+// можна форсити звичайний spot. Список задається через env
+// BRANCHES_FORCE_REGULAR_SPOT (через кому), напр.: "француз,інша філія".
+const TEMP_BRANCHES_FORCE_REGULAR_SPOT = (
+  process.env.BRANCHES_FORCE_REGULAR_SPOT || ""
+)
+  .split(",")
+  .map((name) => normalizeSpotName(name))
+  .filter((name) => name.length > 0);
 
 export const shouldForceRegularSpotForBranch = (branchName: string): boolean => {
   const branchNorm = normalizeSpotName(branchName);
