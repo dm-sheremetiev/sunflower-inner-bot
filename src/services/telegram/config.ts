@@ -7,7 +7,7 @@ export const managerChanelChatId = process?.env?.MANAGER_CHANNELS_CHAT_ID || "";
 export const botToken = process?.env.TELEGRAM_BOT_TOKEN || "";
 export const forwardChatId = process?.env?.VIDEO_CHAT_ID || "";
 export const isHoliday =
-  (process?.env?.IS_HOLIDAY || "").toLowerCase() === "true";
+  (process?.env?.л || "").toLowerCase() === "true";
 export const productDeliveredStatus =
   process?.env?.PRODUCT_DELIVERED_STATUS || "23";
 export const zReportChatId = process?.env?.Z_REPORT_CHAT_ID || "";

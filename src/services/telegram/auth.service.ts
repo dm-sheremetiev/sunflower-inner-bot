@@ -5,13 +5,25 @@ import { normalizePhone } from "../../helpers/utils.js";
 import { TelegramUserData } from "../../types/telegram.js";
 import type { Contact } from "grammy/types";
 
-const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+const CRM_USERS_CACHE_TTL_MS = 60 * 1000;
 type CrmUser = {
   id: number;
   username?: string | null;
   phone?: string | null;
   full_name?: string | null;
   role_id?: number;
+};
+
+let crmUsersCache: { data: CrmUser[]; fetchedAt: number } | null = null;
+
+const getCrmUsersCached = async (): Promise<CrmUser[]> => {
+  const now = Date.now();
+  if (crmUsersCache && now - crmUsersCache.fetchedAt < CRM_USERS_CACHE_TTL_MS) {
+    return crmUsersCache.data;
+  }
+  const data = (await fetchActiveCrmUsers()) as CrmUser[];
+  crmUsersCache = { data, fetchedAt: now };
+  return data;
 };
 
 export const isUserAuthenticated = (chatId: number): { isAuth: boolean; user?: TelegramUserData } => {
@@ -41,10 +53,10 @@ export const processAuthentication = async (
   }
 
   try {
-    const crmUsers = await fetchActiveCrmUsers();
-    
+    const crmUsers = await getCrmUsersCached();
+
     // Attempt logic matching
-    const crmUser = (crmUsers as CrmUser[]).find((u) => {
+    const crmUser = crmUsers.find((u) => {
       const crmPhone = u.phone ? normalizePhone(u.phone) : null;
       
       if (crmPhone && phoneToSearch && crmPhone === phoneToSearch) return true;
@@ -98,37 +110,39 @@ export const verifyUserAccess = async (chatId: number): Promise<{ isValid: boole
     return { isValid: false };
   }
 
-  const now = Date.now();
-  if (now - user.lastCheckedAt > THREE_DAYS_MS) {
-    const phoneToSearch = user.phone;
-    const usernameToSearch = user.username;
+  const phoneToSearch = user.phone;
+  const usernameToSearch = user.username;
 
-    try {
-      const crmUsers = await fetchActiveCrmUsers();
-      const matched = (crmUsers as CrmUser[]).find((u) => {
-        const crmPhone = u.phone ? normalizePhone(u.phone) : null;
-        if (crmPhone && phoneToSearch && crmPhone === phoneToSearch) return true;
-        if (usernameToSearch && u.username && u.username.toLowerCase() === usernameToSearch.toLowerCase()) return true;
-        return false;
-      });
+  try {
+    const crmUsers = await getCrmUsersCached();
+    const matched = crmUsers.find((u) => {
+      if (user.crmUserId && u.id === user.crmUserId) return true;
+      const crmPhone = u.phone ? normalizePhone(u.phone) : null;
+      if (crmPhone && phoneToSearch && crmPhone === phoneToSearch) return true;
+      if (usernameToSearch && u.username && u.username.toLowerCase() === usernameToSearch.toLowerCase()) return true;
+      return false;
+    });
 
-      if (!matched) {
-        user.isAuthenticated = false;
-        fileHelper.saveUsers(users);
-        return { isValid: false };
-      }
-
-      if (typeof matched.role_id === "number") {
-        user.crmRoleId = matched.role_id;
-      }
-      user.isCourier = isCourierRoleId(matched.role_id);
-
-      user.lastCheckedAt = now;
+    if (!matched) {
+      user.isAuthenticated = false;
       fileHelper.saveUsers(users);
-    } catch (error) {
-      // API call failed, fail open so user isn't blocked by downtime
-      console.error("CRM unavailable while re-verifying", error);
+      return { isValid: false };
     }
+
+    const newRoleId = typeof matched.role_id === "number" ? matched.role_id : undefined;
+    const newIsCourier = isCourierRoleId(matched.role_id);
+    const roleChanged = user.crmRoleId !== newRoleId || user.isCourier !== newIsCourier;
+
+    if (roleChanged) {
+      user.crmRoleId = newRoleId;
+      user.isCourier = newIsCourier;
+    }
+
+    user.lastCheckedAt = Date.now();
+    fileHelper.saveUsers(users);
+  } catch (error) {
+    // API call failed, fail open so user isn't blocked by downtime
+    console.error("CRM unavailable while re-verifying", error);
   }
 
   return { isValid: true };
