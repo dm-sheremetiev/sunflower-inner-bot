@@ -591,7 +591,7 @@ export const sendMessageAboutNewOrder = async (
       return "No order";
     }
 
-    const order = await getOrderInfo(orderId, reply);
+    let order = await getOrderInfo(orderId, reply);
     let assignedMessage = "";
 
     if (!order) {
@@ -602,6 +602,25 @@ export const sendMessageAboutNewOrder = async (
       return "Повідомлення було відправлено менеджеру.";
     }
 
+    // KeyCRM інколи шле order.change_order_status раніше, ніж зберігає позиції
+    // замовлення, тож products приходить пустим. Перечитуємо кілька разів.
+    for (let attempt = 1; attempt <= 3 && !order.products?.length; attempt++) {
+      reply.log.warn(
+        { orderId, attempt },
+        "Order has no products yet, retrying fetch before Poster sync",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const refetched = await getOrderInfo(orderId, reply);
+      if (refetched) order = refetched;
+    }
+
+    if (!order.products?.length) {
+      reply.log.warn(
+        { orderId },
+        "Order still has no products after retries; Poster sync will likely be skipped",
+      );
+    }
+
     const { assigned } = order;
 
     if (assigned?.length) {
@@ -609,6 +628,10 @@ export const sendMessageAboutNewOrder = async (
 
       assignedMessage = `. Відповідальні: ${assignedPeople}`;
     } else {
+      reply.log.warn(
+        { orderId },
+        "Poster sync skipped: order has no assigned manager",
+      );
       await sendTelegramMessageToMainAccount(
         `Замовлення № ${orderId} змінило статус, але менеджер не назначив відповідальних.`,
       );

@@ -148,6 +148,8 @@ const getDeliveryTimeRangeStart = (order: Order): string | null => {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:00`;
 };
 
+const POSTER_DELIVERY_MIN_LEAD_MINUTES = 30;
+
 const getPosterDeliveryTime = (order: Order): string => {
   const baseDate = order.shipping?.shipping_date_actual
     ? dayjs(order.shipping.shipping_date_actual).tz(KYIV_TZ)
@@ -155,7 +157,15 @@ const getPosterDeliveryTime = (order: Order): string => {
   const datePart = baseDate.format("YYYY-MM-DD");
   const timePart =
     getDeliveryTimeRangeStart(order) ?? dayjs().tz(KYIV_TZ).format("HH:mm:ss");
-  return `${datePart} ${timePart}`;
+
+  const composed = dayjs.tz(`${datePart} ${timePart}`, KYIV_TZ);
+  const minAllowed = dayjs()
+    .tz(KYIV_TZ)
+    .add(POSTER_DELIVERY_MIN_LEAD_MINUTES, "minute");
+  const finalTime =
+    composed.isValid() && composed.isAfter(minAllowed) ? composed : minAllowed;
+
+  return finalTime.format("YYYY-MM-DD HH:mm:ss");
 };
 
 const formatPosterReceiptsText = (receipts: PosterReceiptRecord[]): string => {
@@ -478,6 +488,7 @@ const mapOrderProductsToPosterProducts = async (
   reply: FastifyReply,
 ): Promise<PosterIncomingOrderProduct[]> => {
   const productsDetailsMap = await fetchOrderProductsDetailsMap(order);
+  const skipped: Array<{ name?: string; reason: string }> = [];
   const mapped = (order.products ?? [])
     .map((product) => {
       const catalogId = getCatalogProductIdForLine(product);
@@ -487,6 +498,7 @@ const mapOrderProductsToPosterProducts = async (
       const comment = String(product.comment ?? "").trim();
 
       if (!Number.isFinite(count) || count <= 0) {
+        skipped.push({ name: product.name, reason: "invalid_count" });
         return null;
       }
 
@@ -519,6 +531,10 @@ const mapOrderProductsToPosterProducts = async (
       const productId = incomingParentProductId;
 
       if (!productId) {
+        skipped.push({
+          name: product.name,
+          reason: "missing Poster product id (CT_1022)",
+        });
         return null;
       }
 
@@ -548,6 +564,18 @@ const mapOrderProductsToPosterProducts = async (
       return payloadItem;
     })
     .filter((item): item is PosterIncomingOrderProduct => Boolean(item));
+
+  if (skipped.length) {
+    reply.log.warn(
+      {
+        orderId: order.id,
+        totalLines: (order.products ?? []).length,
+        mappedCount: mapped.length,
+        skipped,
+      },
+      "Poster sync: some order products were skipped (not sent to Poster)",
+    );
+  }
 
   if (!mapped.length) {
     reply.log.error(
@@ -585,6 +613,10 @@ export const createPosterOrdersAndStoreReceipts = async (
   const orderId = Number(order.id);
   const branches = extractOrderBranches(order, branchTags);
   if (!branches.length) {
+    reply.log.warn(
+      { orderId, orderTags: order.tags?.map((tag) => tag.name) ?? [] },
+      "Poster sync skipped: order has no branch tag",
+    );
     return null;
   }
 
@@ -656,13 +688,23 @@ export const createPosterOrdersAndStoreReceipts = async (
       const transactionId = extractPosterTransactionId(data);
       if (!transactionId) {
         reply.log.error(
-          { orderId, branchName, spotId: spot.spot_id, response: data },
+          { orderId, branchName, spotId: spot.spot_id, deliveryTime, response: data },
           "Poster sync failed: invalid transaction_id",
         );
         continue;
       }
 
       receipts.push({ branchName, transactionId });
+      reply.log.info(
+        {
+          orderId,
+          branchName,
+          spotId: spot.spot_id,
+          transactionId,
+          deliveryTime,
+        },
+        "Poster sync: incoming order created",
+      );
     } catch (error) {
       const transactionIdFromError = axios.isAxiosError(error)
         ? extractPosterTransactionId(error.response?.data)
