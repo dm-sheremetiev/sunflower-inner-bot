@@ -17,6 +17,7 @@ const DELIVERY_TIME_FIELD_UUID = "OR_1006";
 const POSTER_INCOMING_PARENT_PRODUCT_FIELD_UUID = "CT_1022";
 const POSTER_INCOMING_MODIFICATOR_FIELD_UUID = "CT_1025";
 const POSTER_INCOMING_DISH_MODIFICATION_FIELD_UUID = "CT_1026";
+const POSTER_STOCK_PRODUCT_FIELD_UUID = "CT_1008";
 
 type PosterSpot = {
   spot_id: number;
@@ -528,12 +529,26 @@ const mapOrderProductsToPosterProducts = async (
         ),
       );
 
-      const productId = incomingParentProductId;
+      let productId = incomingParentProductId;
+
+      if (
+        !productId &&
+        !incomingModificatorId &&
+        !incomingDishModificationIds.length
+      ) {
+        productId = parseFieldIds(
+          getIncomingFieldRawValue(
+            product,
+            details,
+            POSTER_STOCK_PRODUCT_FIELD_UUID,
+          ),
+        )[0];
+      }
 
       if (!productId) {
         skipped.push({
           name: product.name,
-          reason: "missing Poster product id (CT_1022)",
+          reason: "missing Poster product id (CT_1022 / CT_1008)",
         });
         return null;
       }
