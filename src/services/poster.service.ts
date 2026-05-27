@@ -484,6 +484,51 @@ const getCatalogProductIdForLine = (product: OrderProduct): number | null => {
   return offerProductId ?? fallbackProductId;
 };
 
+// Poster відхиляє замовлення (error 99, "products cannot be duplicated"), якщо
+// один і той самий товар трапляється кілька разів. Схлопуємо рядки за
+// product_id + modificator_id: сумуємо count і об'єднуємо модифікації (a за m).
+const aggregatePosterProducts = (
+  items: PosterIncomingOrderProduct[],
+): PosterIncomingOrderProduct[] => {
+  const map = new Map<
+    string,
+    { item: PosterIncomingOrderProduct; mods: Map<number, number> }
+  >();
+
+  for (const it of items) {
+    const key = `${it.product_id}|${it.modificator_id ?? ""}`;
+    let agg = map.get(key);
+    if (!agg) {
+      const base: PosterIncomingOrderProduct = {
+        product_id: it.product_id,
+        count: 0,
+      };
+      if (it.modificator_id) base.modificator_id = it.modificator_id;
+      if (it.comment) base.comment = it.comment;
+      agg = { item: base, mods: new Map() };
+      map.set(key, agg);
+    }
+    agg.item.count += it.count;
+    if (!agg.item.comment && it.comment) agg.item.comment = it.comment;
+    if (it.modification) {
+      try {
+        const arr = JSON.parse(it.modification) as Array<{ m: number; a: number }>;
+        for (const { m, a } of arr) agg.mods.set(m, (agg.mods.get(m) ?? 0) + a);
+      } catch {
+        // ignore malformed modification json
+      }
+    }
+  }
+
+  return [...map.values()].map(({ item, mods }) => {
+    if (mods.size) {
+      const entries = [...mods.entries()].map(([m, a]) => ({ m, a }));
+      item.modification = buildPosterModificationString(entries);
+    }
+    return item;
+  });
+};
+
 const mapOrderProductsToPosterProducts = async (
   order: Order,
   reply: FastifyReply,
@@ -617,7 +662,19 @@ const mapOrderProductsToPosterProducts = async (
     );
   }
 
-  return mapped;
+  const aggregated = aggregatePosterProducts(mapped);
+  if (aggregated.length !== mapped.length) {
+    reply.log.info(
+      {
+        orderId: order.id,
+        before: mapped.length,
+        after: aggregated.length,
+      },
+      "Poster sync: duplicate products merged",
+    );
+  }
+
+  return aggregated;
 };
 
 export const createPosterOrdersAndStoreReceipts = async (
