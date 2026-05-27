@@ -585,6 +585,7 @@ export const sendMessageAboutNewOrder = async (
   reply: FastifyReply,
 ) => {
   try {
+    reply.log.info({ orderId }, "sendMessageAboutNewOrder: received webhook");
     const users = fileHelper.loadUsers();
 
     if (!orderId) {
@@ -643,6 +644,10 @@ export const sendMessageAboutNewOrder = async (
       order,
       reply,
       BRANCH_TAGS,
+    );
+    reply.log.info(
+      { orderId, posterReceipt },
+      "sendMessageAboutNewOrder: Poster sync result",
     );
 
     // Для чатів, де менеджеру потрібно подивитися контекст замовлення з призначеними відповідальними,

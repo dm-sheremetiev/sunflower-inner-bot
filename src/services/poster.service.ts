@@ -626,6 +626,14 @@ export const createPosterOrdersAndStoreReceipts = async (
   branchTags: string[],
 ): Promise<string | null> => {
   const orderId = Number(order.id);
+  reply.log.info(
+    {
+      orderId,
+      orderTags: order.tags?.map((tag) => tag.name) ?? [],
+      orderProductsCount: (order.products ?? []).length,
+    },
+    "Poster sync: start",
+  );
   const branches = extractOrderBranches(order, branchTags);
   if (!branches.length) {
     reply.log.warn(
@@ -639,11 +647,29 @@ export const createPosterOrdersAndStoreReceipts = async (
   const branchSpots = getPosterOnlineShopSpotsByBranches(spots, branches);
   if (!branchSpots.length) {
     reply.log.error(
-      { orderId, branches },
+      {
+        orderId,
+        branches,
+        availableSpots: spots
+          .filter((s) => s.spot_delete === 0)
+          .map((s) => ({ spotId: s.spot_id, name: s.name })),
+      },
       "Poster sync failed: no matching online shop spots",
     );
     return null;
   }
+  reply.log.info(
+    {
+      orderId,
+      branches,
+      resolvedSpots: branchSpots.map((b) => ({
+        branchName: b.branchName,
+        spotId: b.spot.spot_id,
+        spotName: b.spot.name,
+      })),
+    },
+    "Poster sync: resolved online shop spots",
+  );
 
   const phone = normalizePosterPhone(order.buyer?.phone);
   const buyerIdentity = getPosterBuyerIdentity(order);
@@ -669,6 +695,19 @@ export const createPosterOrdersAndStoreReceipts = async (
   const deliveryPriceKopecks = getPosterDeliveryPriceKopecks(order);
   const includeDeliveryFields =
     !hasSelfPickupTag(order) && deliveryPriceKopecks > 0;
+  reply.log.info(
+    {
+      orderId,
+      phone,
+      deliveryTime,
+      deliveryPriceKopecks,
+      includeDeliveryFields,
+      isSelfPickup: hasSelfPickupTag(order),
+      mappedProductsCount: products.length,
+      products,
+    },
+    "Poster sync: payload computed",
+  );
   const receipts: PosterReceiptRecord[] = [];
 
   for (const { branchName, spot } of branchSpots) {
@@ -693,12 +732,20 @@ export const createPosterOrdersAndStoreReceipts = async (
         ...payloadBase,
       };
 
+      reply.log.info(
+        { orderId, branchName, spotId: spot.spot_id, payload },
+        "Poster sync: sending createIncomingOrder",
+      );
+
       const { data } =
         await posterApiClient.post<PosterCreateIncomingOrderResponse>(
           `/incomingOrders.createIncomingOrder`,
           payload,
         );
-      console.log("POSTER DATA", data);
+      reply.log.info(
+        { orderId, branchName, spotId: spot.spot_id, response: data },
+        "Poster sync: createIncomingOrder response",
+      );
 
       const transactionId = extractPosterTransactionId(data);
       if (!transactionId) {

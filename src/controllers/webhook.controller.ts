@@ -137,6 +137,15 @@ export const processNewOrderWebhook = async (
   request: FastifyRequest<{ Body: ChangeOrderEvent | undefined }>,
   reply: FastifyReply
 ) => {
+  const body = request.body as ChangeOrderEvent | undefined;
+  reply.log.info(
+    {
+      event: body?.event,
+      orderId: body?.context?.id,
+      status: (body?.context as { status?: unknown } | undefined)?.status,
+    },
+    "Webhook /new: incoming event"
+  );
   return safetyWrapper(request, reply, async (orderId) => {
     await sendMessageAboutNewOrder(orderId, reply);
   });
