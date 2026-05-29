@@ -171,7 +171,14 @@ function buildOrdersReplyKeyboard(
   return { keyboard, resize_keyboard: true };
 }
 
-function formatDiscountBlock(order: UserOrderSummary): string[] {
+type DiscountSource = {
+  loyaltyName?: string | null;
+  loyaltyDiscountPercent?: number | null;
+  totalDiscount?: number | null;
+  discountPercent?: number | null;
+};
+
+function formatDiscountBlock(order: DiscountSource): string[] {
   const lines: string[] = [];
 
   if (order.loyaltyName || typeof order.loyaltyDiscountPercent === "number") {
@@ -186,11 +193,11 @@ function formatDiscountBlock(order: UserOrderSummary): string[] {
   }
 
   const hasOrderDiscount =
-    order.totalDiscount !== 0 || order.discountPercent !== 0;
+    (order.totalDiscount ?? 0) !== 0 || (order.discountPercent ?? 0) !== 0;
 
   if (hasOrderDiscount) {
-    const amount = `${order.totalDiscount} грн`;
-    const percent = `${order.discountPercent}%`;
+    const amount = `${order.totalDiscount ?? 0} грн`;
+    const percent = `${order.discountPercent ?? 0}%`;
     lines.push(
       `🏷 Ручна знижка на замовлення: ${escapeAllSymbols(amount)} \\(${escapeAllSymbols(percent)}\\)`,
     );
@@ -385,6 +392,23 @@ function buildOrderDetailsText(order: OrderWithAttachments): string {
   }
 
   lines.push(`🧾 Чек Poster: ${escapeAllSymbols(posterReceipt)}`);
+
+  const discountLines = formatDiscountBlock({
+    loyaltyName: order.discount_data?.loyalty?.name,
+    loyaltyDiscountPercent:
+      typeof order.discount_data?.loyalty?.discount === "number"
+        ? order.discount_data.loyalty.discount
+        : undefined,
+    totalDiscount:
+      typeof order.total_discount === "number" ? order.total_discount : undefined,
+    discountPercent:
+      typeof order.discount_percent === "number"
+        ? order.discount_percent
+        : undefined,
+  });
+  if (discountLines.length) {
+    lines.push(...discountLines);
+  }
 
   if (managerComment !== "—") {
     lines.push(`\n*Коментар менеджера:*\n${managerComment}`);
