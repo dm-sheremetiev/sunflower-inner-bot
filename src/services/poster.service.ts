@@ -484,48 +484,88 @@ const getCatalogProductIdForLine = (product: OrderProduct): number | null => {
   return offerProductId ?? fallbackProductId;
 };
 
+const parseModificationEntries = (
+  it: PosterIncomingOrderProduct,
+): Array<{ m: number; a: number }> => {
+  if (!it.modification) return [];
+  try {
+    return JSON.parse(it.modification) as Array<{ m: number; a: number }>;
+  } catch {
+    // ignore malformed modification json
+    return [];
+  }
+};
+
+// Сигнатура рядка за НАБОРОМ dish_modification_id (без урахування кількості a).
+// "" — рядок без техкартних модифікацій.
+const getModificationSignature = (it: PosterIncomingOrderProduct): string =>
+  parseModificationEntries(it)
+    .map((x) => x.m)
+    .sort((a, b) => a - b)
+    .join(",");
+
 // Poster відхиляє замовлення (error 99, "products cannot be duplicated"), якщо
 // один і той самий товар трапляється кілька разів. Схлопуємо рядки за
-// product_id + modificator_id: сумуємо count і об'єднуємо модифікації (a за m).
-const aggregatePosterProducts = (
+// product_id + modificator_id, але розрізняємо два випадки:
+//
+//  1. Однакова сигнатура модифікацій (або без модифікацій) — це справжні дублі
+//     (напр. кілька однакових композицій). Сумуємо count і a (захист від error 99).
+//
+//  2. Різні dish-модифікації одного product_id — це ОДИН товар з кількома
+//     АДИТИВНИМИ груповими модифікаціями (напр. «Корзина розмір S» = Біла + ОАЗИС
+//     з однієї group_modification, базова ціна товару 0, вся ціна в модифікаціях).
+//     Тут count сумувати НЕ можна — інакше базовий товар задвоюється на касі.
+//     Емітимо одну позицію: count = 1, кількість кожної модифікації йде в a.
+//     Підсумок коректний за будь-якої формули Poster (count × Σ(a·price) і Σ(a·price)).
+export const aggregatePosterProducts = (
   items: PosterIncomingOrderProduct[],
 ): PosterIncomingOrderProduct[] => {
-  const map = new Map<
-    string,
-    { item: PosterIncomingOrderProduct; mods: Map<number, number> }
-  >();
+  const groups = new Map<string, PosterIncomingOrderProduct[]>();
+  const keyOrder: string[] = [];
 
   for (const it of items) {
     const key = `${it.product_id}|${it.modificator_id ?? ""}`;
-    let agg = map.get(key);
-    if (!agg) {
-      const base: PosterIncomingOrderProduct = {
-        product_id: it.product_id,
-        count: 0,
-      };
-      if (it.modificator_id) base.modificator_id = it.modificator_id;
-      if (it.comment) base.comment = it.comment;
-      agg = { item: base, mods: new Map() };
-      map.set(key, agg);
+    let bucket = groups.get(key);
+    if (!bucket) {
+      bucket = [];
+      groups.set(key, bucket);
+      keyOrder.push(key);
     }
-    agg.item.count += it.count;
-    if (!agg.item.comment && it.comment) agg.item.comment = it.comment;
-    if (it.modification) {
-      try {
-        const arr = JSON.parse(it.modification) as Array<{ m: number; a: number }>;
-        for (const { m, a } of arr) agg.mods.set(m, (agg.mods.get(m) ?? 0) + a);
-      } catch {
-        // ignore malformed modification json
-      }
-    }
+    bucket.push(it);
   }
 
-  return [...map.values()].map(({ item, mods }) => {
+  return keyOrder.map((key) => {
+    const bucket = groups.get(key)!;
+    const first = bucket[0];
+    const result: PosterIncomingOrderProduct = {
+      product_id: first.product_id,
+      count: 0,
+    };
+    if (first.modificator_id) result.modificator_id = first.modificator_id;
+
+    const comment = bucket.find((b) => b.comment?.trim())?.comment;
+    if (comment) result.comment = comment;
+
+    const mods = new Map<number, number>();
+    const distinctSignatures = new Set(bucket.map(getModificationSignature));
+    const isAdditiveGroup = distinctSignatures.size > 1;
+
+    for (const it of bucket) {
+      if (!isAdditiveGroup) result.count += it.count;
+      for (const { m, a } of parseModificationEntries(it)) {
+        mods.set(m, (mods.get(m) ?? 0) + a);
+      }
+    }
+
+    // Один товар з різними груповими модифікаціями — рівно одна базова позиція.
+    if (isAdditiveGroup) result.count = 1;
+
     if (mods.size) {
       const entries = [...mods.entries()].map(([m, a]) => ({ m, a }));
-      item.modification = buildPosterModificationString(entries);
+      result.modification = buildPosterModificationString(entries);
     }
-    return item;
+
+    return result;
   });
 };
 
