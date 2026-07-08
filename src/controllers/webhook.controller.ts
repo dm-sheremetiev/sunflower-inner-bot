@@ -1,6 +1,10 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { ChangeOrderEvent } from "../types/index.js";
 import {
+  handlePosterClientAddedWebhook,
+  type PosterClientWebhookBody,
+} from "../services/poster.service.js";
+import {
   sendPackedMessageNotification,
   sendMessageAboutWaiting,
   sendWithoutPackageMessageToManager,
@@ -205,4 +209,29 @@ export const checkPaymentsHandler = async (
   return safetyWrapper(request, reply, async (orderId) => {
     return await checkOrderPaymentsAndRevert(orderId, reply);
   });
+};
+
+/**
+ * Вебхук Poster про додавання клієнта (object=client, action=added).
+ * Тягне клієнта з Poster і створює покупця у KeyCRM, повідомляє результат у чат.
+ * Завжди відповідає 200, щоб Poster не ретраїв подію.
+ */
+export const processPosterClientAddedWebhook = async (
+  request: FastifyRequest<{ Body: PosterClientWebhookBody | undefined }>,
+  reply: FastifyReply
+) => {
+  const body = request.body as PosterClientWebhookBody | undefined;
+  reply.log.info(
+    { object: body?.object, action: body?.action, objectId: body?.object_id },
+    "Webhook /poster/client-added: incoming event"
+  );
+  try {
+    await handlePosterClientAddedWebhook(body, reply);
+    return reply.status(200).send({ ok: true });
+  } catch (error) {
+    request.log.error({ error }, "Poster client webhook failed");
+    if (!reply.sent) {
+      return reply.status(200).send({ ok: false });
+    }
+  }
 };

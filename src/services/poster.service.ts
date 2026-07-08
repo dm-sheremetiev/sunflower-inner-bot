@@ -5,6 +5,7 @@ import timezone from "dayjs/plugin/timezone.js";
 import type { FastifyReply } from "fastify";
 import { keycrmApiClient } from "../api/keycrmApiClient.js";
 import { posterApiClient } from "../api/posterApiClient.js";
+import { sendTelegramMessage } from "./telegram/telegramApi.js";
 import type { Order } from "../types/keycrm.js";
 
 dayjs.extend(utc);
@@ -988,4 +989,275 @@ export const createPosterOrdersAndStoreReceipts = async (
     );
     return null;
   }
+};
+
+/* ------------------------------------------------------------------ */
+/* Poster webhook: новий клієнт -> створення покупця (buyer) у KeyCRM  */
+/* ------------------------------------------------------------------ */
+
+export type PosterClientWebhookBody = {
+  account?: string;
+  object?: string;
+  object_id?: number | string;
+  action?: string;
+  time?: string;
+  verify?: string;
+  account_number?: string;
+  data?: string;
+};
+
+type PosterClientAddress = {
+  country?: string;
+  city?: string;
+  address1?: string;
+  address2?: string;
+  comment?: string;
+  zip_code?: string;
+};
+
+type PosterClient = {
+  client_id?: string;
+  firstname?: string;
+  lastname?: string;
+  patronymic?: string;
+  discount_per?: string;
+  bonus?: string;
+  total_payed_sum?: string;
+  phone?: string;
+  phone_number?: string;
+  email?: string;
+  birthday?: string;
+  client_groups_name?: string;
+  comment?: string;
+  country?: string;
+  city?: string;
+  address?: string;
+  addresses?: PosterClientAddress[];
+};
+
+type KeycrmBuyerShipping = {
+  address?: string;
+  city?: string;
+  country?: string;
+  zip_code?: string;
+};
+
+type KeycrmCreateBuyerPayload = {
+  full_name: string;
+  phone?: string[];
+  email?: string[];
+  birthday?: string;
+  note?: string;
+  shipping?: KeycrmBuyerShipping[];
+};
+
+const POSTER_NEW_CLIENT_CHAT_ID = process.env.POSTER_NEW_CLIENT_CHAT_ID;
+
+const normalizeClientPhone = (client: PosterClient): string | null => {
+  const digits = String(client.phone_number ?? client.phone ?? "").replace(
+    /\D/g,
+    "",
+  );
+  if (!digits) return null;
+  if (digits.startsWith("380")) return `+${digits}`;
+  if (digits.startsWith("0")) return `+38${digits}`;
+  return `+${digits}`;
+};
+
+const buildBuyerFullName = (client: PosterClient): string => {
+  const name = [client.lastname, client.firstname, client.patronymic]
+    .map((part) => String(part ?? "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  if (name) return name;
+  const phone = normalizeClientPhone(client);
+  if (phone) return phone;
+  const id = String(client.client_id ?? "").trim();
+  return id ? `Клієнт Poster #${id}` : "Клієнт Poster";
+};
+
+const parseClientBirthday = (value: string | undefined): string | undefined => {
+  const raw = String(value ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw) || raw === "0000-00-00") return undefined;
+  return raw;
+};
+
+const buildBuyerShipping = (
+  client: PosterClient,
+): KeycrmBuyerShipping[] | undefined => {
+  const source = (client.addresses ?? []).find((addr) =>
+    [addr.country, addr.city, addr.address1, addr.zip_code].some(
+      (part) => String(part ?? "").trim().length > 0,
+    ),
+  );
+
+  const country = String(source?.country ?? client.country ?? "").trim();
+  const city = String(source?.city ?? client.city ?? "").trim();
+  const address = String(source?.address1 ?? client.address ?? "").trim();
+  const zip = String(source?.zip_code ?? "").trim();
+
+  if (!country && !city && !address && !zip) return undefined;
+
+  const shipping: KeycrmBuyerShipping = {};
+  if (address) shipping.address = address;
+  if (city) shipping.city = city;
+  if (country) shipping.country = country;
+  if (zip) shipping.zip_code = zip;
+  return [shipping];
+};
+
+const buildBuyerNote = (client: PosterClient): string => {
+  const parts: string[] = ["Створено з Poster"];
+  const id = String(client.client_id ?? "").trim();
+  if (id) parts.push(`Poster client_id: ${id}`);
+  const group = String(client.client_groups_name ?? "").trim();
+  if (group) parts.push(`Група: ${group}`);
+  const bonus = Number(client.bonus);
+  if (Number.isFinite(bonus) && bonus > 0) parts.push(`Бонус: ${bonus}`);
+  const totalPayed = Number(client.total_payed_sum);
+  if (Number.isFinite(totalPayed) && totalPayed > 0) {
+    parts.push(`Всього оплачено: ${(totalPayed / 100).toFixed(2)} грн`);
+  }
+  const comment = String(client.comment ?? "").trim();
+  if (comment) parts.push(`Коментар Poster: ${comment}`);
+  return parts.join(". ");
+};
+
+const buildBuyerPayload = (client: PosterClient): KeycrmCreateBuyerPayload => {
+  const payload: KeycrmCreateBuyerPayload = {
+    full_name: buildBuyerFullName(client),
+    note: buildBuyerNote(client),
+  };
+
+  const phone = normalizeClientPhone(client);
+  if (phone) payload.phone = [phone];
+
+  const email = String(client.email ?? "").trim();
+  if (email) payload.email = [email];
+
+  const birthday = parseClientBirthday(client.birthday);
+  if (birthday) payload.birthday = birthday;
+
+  const shipping = buildBuyerShipping(client);
+  if (shipping) payload.shipping = shipping;
+
+  return payload;
+};
+
+const notifyBuyerResult = async (
+  reply: FastifyReply,
+  text: string,
+): Promise<void> => {
+  if (!POSTER_NEW_CLIENT_CHAT_ID) {
+    reply.log.warn(
+      "POSTER_NEW_CLIENT_CHAT_ID is not set, skip Telegram notification",
+    );
+    return;
+  }
+  await sendTelegramMessage(POSTER_NEW_CLIENT_CHAT_ID, text);
+};
+
+const fetchPosterClient = async (
+  clientId: number,
+): Promise<PosterClient | null> => {
+  const { data } = await posterApiClient.get<{ response?: PosterClient[] }>(
+    `/clients.getClient`,
+    { params: { client_id: clientId } },
+  );
+  const client = Array.isArray(data?.response) ? data.response[0] : undefined;
+  return client ?? null;
+};
+
+/**
+ * Обробка вебхука Poster про додавання клієнта.
+ * Перевіряє object === "client" та action === "added", тягне клієнта з Poster
+ * (clients.getClient) і створює покупця в KeyCRM (/buyer). Результат надсилає
+ * у Telegram-чат (env POSTER_NEW_CLIENT_CHAT_ID).
+ */
+export const handlePosterClientAddedWebhook = async (
+  body: PosterClientWebhookBody | undefined,
+  reply: FastifyReply,
+): Promise<{ handled: boolean; created?: boolean }> => {
+  if (!body || body.object !== "client" || body.action !== "added") {
+    reply.log.info(
+      { object: body?.object, action: body?.action },
+      "Poster client webhook: ignored (not client/added)",
+    );
+    return { handled: false };
+  }
+
+  const clientId = getNumericIdFromUnknown(body.object_id);
+  if (!clientId) {
+    reply.log.warn(
+      { objectId: body.object_id },
+      "Poster client webhook: missing/invalid object_id",
+    );
+    return { handled: false };
+  }
+
+  let client: PosterClient | null = null;
+  try {
+    client = await fetchPosterClient(clientId);
+  } catch (error) {
+    reply.log.error(
+      { clientId, posterRequest: summarizeAxiosErrorForLog(error) },
+      "Poster client webhook: clients.getClient failed",
+    );
+  }
+
+  if (!client) {
+    reply.log.error(
+      { clientId },
+      "Poster client webhook: client not found in Poster",
+    );
+    await notifyBuyerResult(
+      reply,
+      `⚠️ Клієнт НЕ створений у CRM\nPoster client_id: ${clientId}\nПричина: не вдалося отримати дані клієнта з Poster`,
+    );
+    return { handled: true, created: false };
+  }
+
+  const payload = buildBuyerPayload(client);
+  const fullName = payload.full_name;
+  const phoneText = payload.phone?.[0] ?? "—";
+
+  const MAX_BUYER_CREATE_ATTEMPTS = 3;
+  for (let attempt = 1; attempt <= MAX_BUYER_CREATE_ATTEMPTS; attempt++) {
+    try {
+      const { data: created } = await keycrmApiClient.post<{ id?: number }>(
+        `buyer`,
+        payload,
+      );
+      reply.log.info(
+        { clientId, buyerId: created?.id, attempt, payload },
+        "Poster client webhook: buyer created in KeyCRM",
+      );
+      await notifyBuyerResult(
+        reply,
+        `✅ Клієнт створений у CRM${created?.id ? ` (ID ${created.id})` : ""}\nІм'я: ${fullName}\nТелефон: ${phoneText}`,
+      );
+      return { handled: true, created: true };
+    } catch (error) {
+      const isLastAttempt = attempt === MAX_BUYER_CREATE_ATTEMPTS;
+      reply.log.error(
+        {
+          clientId,
+          attempt,
+          maxAttempts: MAX_BUYER_CREATE_ATTEMPTS,
+          posterRequest: summarizeAxiosErrorForLog(error),
+          payload,
+        },
+        isLastAttempt
+          ? "Poster client webhook: buyer creation failed (all attempts exhausted)"
+          : "Poster client webhook: buyer creation failed, will retry",
+      );
+    }
+  }
+
+  await notifyBuyerResult(
+    reply,
+    `⚠️ Клієнт НЕ створений у CRM\nІм'я: ${fullName}\nТелефон: ${phoneText}\nПричина: помилка при створенні покупця в CRM (після ${MAX_BUYER_CREATE_ATTEMPTS} спроб)`,
+  );
+  return { handled: true, created: false };
 };

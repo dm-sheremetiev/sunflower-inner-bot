@@ -11,6 +11,7 @@ import {
   validateStatusChangeHandler,
   validateAddressAndRevertHandler,
   checkPaymentsHandler,
+  processPosterClientAddedWebhook,
 } from "../../controllers/webhook.controller.js";
 
 const webhookRoutes = async (server: FastifyInstance) => {
@@ -25,6 +26,7 @@ const webhookRoutes = async (server: FastifyInstance) => {
   server.post("/validate-status-change", validateStatusChangeHandler);
   server.post("/validate-address", validateAddressAndRevertHandler);
   server.post("/check-payments", checkPaymentsHandler);
+  server.post("/poster/client-added", processPosterClientAddedWebhook);
 };
 
 export default webhookRoutes;
