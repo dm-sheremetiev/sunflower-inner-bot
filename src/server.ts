@@ -20,6 +20,18 @@ export const server = Fastify({
         colorize: true,
       },
     },
+    serializers: {
+      req(request) {
+        return {
+          method: request.method,
+          // повний URL з протоколом, хостом та префіксом маршруту
+          url: `${request.protocol}://${request.hostname}${request.url}`,
+          host: request.hostname,
+          remoteAddress: request.ip,
+          remotePort: request.socket?.remotePort,
+        };
+      },
+    },
   },
 });
 

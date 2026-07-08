@@ -1233,9 +1233,12 @@ export const handlePosterClientAddedWebhook = async (
         { clientId, buyerId: created?.id, attempt, payload },
         "Poster client webhook: buyer created in KeyCRM",
       );
+      const buyerLink = created?.id
+        ? `\nПосилання: https://sunflower.keycrm.app/app/clients/${created.id}`
+        : "";
       await notifyBuyerResult(
         reply,
-        `✅ Клієнт створений у CRM${created?.id ? ` (ID ${created.id})` : ""}\nІм'я: ${fullName}\nТелефон: ${phoneText}`,
+        `✅ Клієнт створений у CRM${created?.id ? ` (ID ${created.id})` : ""}\nІм'я: ${fullName}\nТелефон: ${phoneText}${buyerLink}`,
       );
       return { handled: true, created: true };
     } catch (error) {
