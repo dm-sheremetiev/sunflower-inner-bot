@@ -1054,10 +1054,23 @@ type KeycrmCreateBuyerPayload = {
 const POSTER_NEW_CLIENT_CHAT_ID = process.env.POSTER_NEW_CLIENT_CHAT_ID;
 
 const normalizeClientPhone = (client: PosterClient): string | null => {
-  const digits = String(client.phone_number ?? client.phone ?? "").replace(
-    /\D/g,
-    "",
-  );
+  const rawPhone = String(client.phone ?? "").trim();
+  const rawNumber = String(client.phone_number ?? "").trim();
+
+  // Якщо номер уже в міжнародному форматі з "+" (напр. +1, +44) — зберігаємо
+  // код країни як є, не нав'язуємо +380.
+  const international = rawPhone.startsWith("+")
+    ? rawPhone
+    : rawNumber.startsWith("+")
+      ? rawNumber
+      : "";
+  if (international) {
+    const digits = international.replace(/\D/g, "");
+    return digits ? `+${digits}` : null;
+  }
+
+  // Голий локальний номер без "+" — трактуємо як український.
+  const digits = (rawNumber || rawPhone).replace(/\D/g, "");
   if (!digits) return null;
   if (digits.startsWith("380")) return `+${digits}`;
   if (digits.startsWith("0")) return `+38${digits}`;
