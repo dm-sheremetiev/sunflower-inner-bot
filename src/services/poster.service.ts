@@ -1053,6 +1053,10 @@ type KeycrmCreateBuyerPayload = {
 
 const POSTER_NEW_CLIENT_CHAT_ID = process.env.POSTER_NEW_CLIENT_CHAT_ID;
 
+// Номер-заглушка: у Poster інколи зберігають лише код країни ("+380") або
+// зовсім короткий номер — такий у CRM не передаємо.
+const MIN_PHONE_LENGTH = 6;
+
 const normalizeClientPhone = (client: PosterClient): string | null => {
   const rawPhone = String(client.phone ?? "").trim();
   const rawNumber = String(client.phone_number ?? "").trim();
@@ -1064,17 +1068,21 @@ const normalizeClientPhone = (client: PosterClient): string | null => {
     : rawNumber.startsWith("+")
       ? rawNumber
       : "";
+
+  let normalized: string | null = null;
   if (international) {
     const digits = international.replace(/\D/g, "");
-    return digits ? `+${digits}` : null;
+    normalized = digits ? `+${digits}` : null;
+  } else {
+    // Голий локальний номер без "+" — трактуємо як український.
+    const digits = (rawNumber || rawPhone).replace(/\D/g, "");
+    if (digits.startsWith("380")) normalized = `+${digits}`;
+    else if (digits.startsWith("0")) normalized = `+38${digits}`;
+    else if (digits) normalized = `+${digits}`;
   }
 
-  // Голий локальний номер без "+" — трактуємо як український.
-  const digits = (rawNumber || rawPhone).replace(/\D/g, "");
-  if (!digits) return null;
-  if (digits.startsWith("380")) return `+${digits}`;
-  if (digits.startsWith("0")) return `+38${digits}`;
-  return `+${digits}`;
+  if (!normalized || normalized.length < MIN_PHONE_LENGTH) return null;
+  return normalized;
 };
 
 const buildBuyerFullName = (client: PosterClient): string => {
@@ -1233,7 +1241,7 @@ export const handlePosterClientAddedWebhook = async (
 
   const payload = buildBuyerPayload(client);
   const fullName = payload.full_name;
-  const phoneText = payload.phone?.[0] ?? "—";
+  const phoneText = payload.phone?.[0] ?? "Без номера телефона";
 
   const MAX_BUYER_CREATE_ATTEMPTS = 3;
   for (let attempt = 1; attempt <= MAX_BUYER_CREATE_ATTEMPTS; attempt++) {
