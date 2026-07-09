@@ -64,6 +64,25 @@ export interface TagResponse {
   next_page_url: string;
 }
 
+/** Покупець у списку /buyer (телефони/пошти повертаються масивами). */
+export interface BuyerListItem {
+  id: number;
+  full_name: string;
+  email?: string[] | null;
+  phone?: string[] | null;
+  note?: string | null;
+}
+
+export interface BuyerListResponse {
+  total: number;
+  current_page: number;
+  per_page: number;
+  data: BuyerListItem[];
+  first_page_url: string;
+  last_page_url: string;
+  next_page_url: string | null;
+}
+
 
 const getOrderInfo = async (orderId: string | number, reply: FastifyReply) => {
   try {
@@ -1551,4 +1570,99 @@ export const fetchOrdersForReserve = async (): Promise<Order[]> => {
     if (name.includes("скасовано") || name.includes("отменен")) return false;
     return true;
   });
+};
+
+/** Нормалізує нікнейм для порівняння: обрізає пробіли, прибирає провідні @, у нижній регістр. */
+const normalizeNickname = (value: string): string =>
+  value.trim().replace(/^@+/, "").toLowerCase();
+
+/**
+ * Абонентська частина номера — останні 9 цифр (для UA: без коду країни 380
+ * та транкового 0). Дозволяє порівнювати +380989797617, 380989797617,
+ * 0989797617 та 989797617 як один номер.
+ */
+const phoneSubscriber = (phone: string): string =>
+  (phone ?? "").replace(/\D/g, "").slice(-9);
+
+/**
+ * Формує варіанти телефону для серверного фільтра `filter[buyer_phone]`,
+ * щоб покрити різні формати збереження: +380..., 380..., 0...
+ */
+const buildPhoneSearchVariants = (phone: string): string[] => {
+  const sub = phoneSubscriber(phone);
+  if (sub.length < 9) return [];
+  return [`+380${sub}`, `380${sub}`, `0${sub}`];
+};
+
+/**
+ * Знаходить покупця в KeyCRM.
+ * - Якщо переданий телефон — шукає одразу за телефоном через серверний фільтр
+ *   `filter[buyer_phone]` (як у документації getPaginatedListOfBuyers).
+ * - Інакше — гортає весь список покупців посторінково (limit=50) і порівнює
+ *   нікнейми з `full_name`, поки не знайде потрібного.
+ * Повертає першого знайденого покупця або null.
+ */
+export const findBuyer = async ({
+  phone,
+  nickname,
+}: {
+  phone?: string | null;
+  nickname?: string | null;
+}): Promise<BuyerListItem | null> => {
+  const limit = 50;
+
+  // 1) Є телефон — шукаємо одразу за телефоном (серверний фільтр).
+  //    Передаємо всі формати (+380/380/0) через кому і додатково звіряємо
+  //    по 9 останніх цифрах, щоб уникнути хибних збігів.
+  const trimmedPhone = phone?.trim();
+  if (trimmedPhone) {
+    const variants = buildPhoneSearchVariants(trimmedPhone);
+    if (variants.length === 0) return null;
+    const { data } = await keycrmApiClient.get<BuyerListResponse>("/buyer", {
+      params: {
+        limit,
+        "filter[buyer_phone]": variants.join(","),
+      },
+    });
+    const buyers = data?.data ?? [];
+    const sub = phoneSubscriber(trimmedPhone);
+    const match = buyers.find((buyer) =>
+      (buyer.phone ?? []).some((p) => phoneSubscriber(p) === sub),
+    );
+    return match ?? null;
+  }
+
+  // 2) Телефону немає — гортаємо всіх покупців і шукаємо за нікнеймом (full_name).
+  const needle = nickname ? normalizeNickname(nickname) : "";
+  if (!needle) return null;
+
+  let page = 1;
+  let lastPage = 1;
+  do {
+    const { data } = await keycrmApiClient.get<BuyerListResponse>("/buyer", {
+      params: { limit, page },
+    });
+    const buyers = data?.data ?? [];
+
+    const match = buyers.find(
+      (buyer) => normalizeNickname(buyer.full_name ?? "") === needle,
+    );
+    if (match) return match;
+
+    // Реальна кількість сторінок з пагінації, щоб не запитувати неіснуючі.
+    const perPage = data?.per_page || limit;
+    const total = data?.total ?? 0;
+    lastPage = perPage > 0 ? Math.max(1, Math.ceil(total / perPage)) : page;
+
+    // Немає наступної сторінки або дійшли до останньої — зупиняємось.
+    if (page >= lastPage || !data?.next_page_url || buyers.length < perPage) {
+      break;
+    }
+
+    page++;
+    // пауза між сторінками, щоб не впертися в ліміт запитів (429)
+    await new Promise((r) => setTimeout(r, 1100));
+  } while (page <= lastPage);
+
+  return null;
 };

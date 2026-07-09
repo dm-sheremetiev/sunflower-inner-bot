@@ -4,6 +4,7 @@ import utc from "dayjs/plugin/utc.js";
 import timezone from "dayjs/plugin/timezone.js";
 import type { FastifyReply } from "fastify";
 import { keycrmApiClient } from "../api/keycrmApiClient.js";
+import { findBuyer } from "./keycrm.service.js";
 import { posterApiClient } from "../api/posterApiClient.js";
 import { sendTelegramMessage } from "./telegram/telegramApi.js";
 import type { Order } from "../types/keycrm.js";
@@ -1166,6 +1167,53 @@ const buildBuyerPayload = (client: PosterClient): KeycrmCreateBuyerPayload => {
   return payload;
 };
 
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Обчислює паузу перед наступною спробою створення покупця в KeyCRM.
+ * Для 429 (Too Many Requests) поважає заголовок `retry-after` (секунди) з
+ * невеликим буфером, щоб не впертися в ліміт знову. Для інших помилок —
+ * експоненційний backoff. Значення обмежене зверху.
+ */
+const getBuyerRetryDelayMs = (error: unknown, attempt: number): number => {
+  const MAX_DELAY_MS = 30_000;
+  if (axios.isAxiosError(error) && error.response?.status === 429) {
+    const headers = error.response.headers ?? {};
+    const retryAfterRaw =
+      (headers["retry-after"] as string | undefined) ??
+      (headers["Retry-After"] as string | undefined);
+    const retryAfterSec = Number(retryAfterRaw);
+    if (Number.isFinite(retryAfterSec) && retryAfterSec > 0) {
+      // буфер +2с поверх retry-after, щоб гарантовано пройти вікно ліміту
+      return Math.min((retryAfterSec + 2) * 1000, MAX_DELAY_MS);
+    }
+    // немає заголовка — беремо великий фіксований дефолт для 429
+    return Math.min(15_000, MAX_DELAY_MS);
+  }
+  // exponential backoff: 2с, 4с, 8с...
+  return Math.min(2_000 * 2 ** (attempt - 1), MAX_DELAY_MS);
+};
+
+/**
+ * Формує людиночитабельну причину помилки створення покупця для Telegram.
+ */
+const describeBuyerError = (error: unknown): string => {
+  if (axios.isAxiosError(error)) {
+    const status = error.response?.status;
+    if (status === 429) {
+      return "перевищено ліміт запитів до CRM (429 Too Many Requests)";
+    }
+    const apiMessage =
+      (error.response?.data as { message?: string } | undefined)?.message ??
+      error.message;
+    return status
+      ? `помилка CRM (HTTP ${status}): ${apiMessage}`
+      : `помилка запиту до CRM: ${apiMessage}`;
+  }
+  return error instanceof Error ? error.message : String(error);
+};
+
 const notifyBuyerResult = async (
   reply: FastifyReply,
   text: string,
@@ -1243,7 +1291,37 @@ export const handlePosterClientAddedWebhook = async (
   const fullName = payload.full_name;
   const phoneText = payload.phone?.[0] ?? "Без номера телефона";
 
+  // Перед створенням перевіряємо, чи немає вже такого покупця в CRM:
+  // за телефоном (якщо є) або за нікнеймом (full_name).
+  try {
+    const existing = await findBuyer({
+      phone: payload.phone?.[0] ?? null,
+      nickname: fullName,
+    });
+    if (existing) {
+      reply.log.info(
+        { clientId, buyerId: existing.id, payload },
+        "Poster client webhook: buyer already exists in KeyCRM, skip creation",
+      );
+      const buyerLink = existing.id
+        ? `\nПосилання: https://sunflower.keycrm.app/app/clients/${existing.id}`
+        : "";
+      await notifyBuyerResult(
+        reply,
+        `ℹ️ Клієнт вже існує у CRM${existing.id ? ` (ID ${existing.id})` : ""}\nІм'я: ${fullName}\nТелефон: ${phoneText}${buyerLink}\n\nНового покупця не створювали.`,
+      );
+      return { handled: true, created: false };
+    }
+  } catch (error) {
+    // Помилку пошуку не вважаємо фатальною — продовжуємо створення.
+    reply.log.error(
+      { clientId, posterRequest: summarizeAxiosErrorForLog(error) },
+      "Poster client webhook: findBuyer check failed, proceeding to create",
+    );
+  }
+
   const MAX_BUYER_CREATE_ATTEMPTS = 3;
+  let lastError: unknown = null;
   for (let attempt = 1; attempt <= MAX_BUYER_CREATE_ATTEMPTS; attempt++) {
     try {
       const { data: created } = await keycrmApiClient.post<{ id?: number }>(
@@ -1259,10 +1337,11 @@ export const handlePosterClientAddedWebhook = async (
         : "";
       await notifyBuyerResult(
         reply,
-        `✅ Клієнт створений у CRM${created?.id ? ` (ID ${created.id})` : ""}\nІм'я: ${fullName}\nТелефон: ${phoneText}${buyerLink}`,
+        `✅ Клієнт створений у CRM${created?.id ? ` (ID ${created.id})` : ""}\nІм'я: ${fullName}\nТелефон: ${phoneText}${buyerLink}\n\nПеревірте на дублікати клієнта у CRM`,
       );
       return { handled: true, created: true };
     } catch (error) {
+      lastError = error;
       const isLastAttempt = attempt === MAX_BUYER_CREATE_ATTEMPTS;
       reply.log.error(
         {
@@ -1276,12 +1355,20 @@ export const handlePosterClientAddedWebhook = async (
           ? "Poster client webhook: buyer creation failed (all attempts exhausted)"
           : "Poster client webhook: buyer creation failed, will retry",
       );
+      if (!isLastAttempt) {
+        const delayMs = getBuyerRetryDelayMs(error, attempt);
+        reply.log.info(
+          { clientId, attempt, delayMs },
+          "Poster client webhook: waiting before buyer creation retry",
+        );
+        await sleep(delayMs);
+      }
     }
   }
 
   await notifyBuyerResult(
     reply,
-    `⚠️ Клієнт НЕ створений у CRM\nІм'я: ${fullName}\nТелефон: ${phoneText}\nПричина: помилка при створенні покупця в CRM (після ${MAX_BUYER_CREATE_ATTEMPTS} спроб)`,
+    `⚠️ Клієнт НЕ створений у CRM\nІм'я: ${fullName}\nТелефон: ${phoneText}\nПричина: ${describeBuyerError(lastError)} (після ${MAX_BUYER_CREATE_ATTEMPTS} спроб)`,
   );
   return { handled: true, created: false };
 };
