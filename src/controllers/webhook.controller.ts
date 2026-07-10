@@ -225,13 +225,11 @@ export const processPosterClientAddedWebhook = async (
     { object: body?.object, action: body?.action, objectId: body?.object_id },
     "Webhook /poster/client-added: incoming event"
   );
-  try {
-    await handlePosterClientAddedWebhook(body, reply);
-    return reply.status(200).send({ ok: true });
-  } catch (error) {
+  // Відповідаємо Poster одразу, а важку обробку (пошук дублів + створення)
+  // виконуємо у фоні. Інакше довгий пошук призводить до таймауту, Poster
+  // ретраїть подію, і паралельні запити створюють дублі клієнтів.
+  reply.status(200).send({ ok: true });
+  void handlePosterClientAddedWebhook(body, reply).catch((error) => {
     request.log.error({ error }, "Poster client webhook failed");
-    if (!reply.sent) {
-      return reply.status(200).send({ ok: false });
-    }
-  }
+  });
 };

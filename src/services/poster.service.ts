@@ -1238,11 +1238,21 @@ const fetchPosterClient = async (
   return client ?? null;
 };
 
+/** clientId, які зараз в обробці (захист від паралельних вебхуків). */
+const inFlightClientIds = new Set<number>();
+/** clientId -> час останньої обробки (захист від повторних вебхуків Poster). */
+const recentlyProcessedClientIds = new Map<number, number>();
+/** Скільки часу вважаємо clientId вже обробленим. */
+const CLIENT_DEDUP_TTL_MS = 10 * 60 * 1000;
+
 /**
  * Обробка вебхука Poster про додавання клієнта.
  * Перевіряє object === "client" та action === "added", тягне клієнта з Poster
  * (clients.getClient) і створює покупця в KeyCRM (/buyer). Результат надсилає
  * у Telegram-чат (env POSTER_NEW_CLIENT_CHAT_ID).
+ *
+ * Захищено від дублів: паралельні або повторні вебхуки Poster на той самий
+ * clientId (Poster ретраїть подію при таймауті) обробляються лише один раз.
  */
 export const handlePosterClientAddedWebhook = async (
   body: PosterClientWebhookBody | undefined,
@@ -1265,6 +1275,42 @@ export const handlePosterClientAddedWebhook = async (
     return { handled: false };
   }
 
+  const lastProcessed = recentlyProcessedClientIds.get(clientId);
+  if (lastProcessed && Date.now() - lastProcessed < CLIENT_DEDUP_TTL_MS) {
+    reply.log.info(
+      { clientId },
+      "Poster client webhook: duplicate event (recently processed), skip",
+    );
+    return { handled: true, created: false };
+  }
+  if (inFlightClientIds.has(clientId)) {
+    reply.log.info(
+      { clientId },
+      "Poster client webhook: already processing this client, skip",
+    );
+    return { handled: true, created: false };
+  }
+
+  inFlightClientIds.add(clientId);
+  try {
+    return await processPosterClientAdded(clientId, reply);
+  } finally {
+    inFlightClientIds.delete(clientId);
+    recentlyProcessedClientIds.set(clientId, Date.now());
+    // легке прибирання застарілих записів, щоб мапа не росла безмежно
+    if (recentlyProcessedClientIds.size > 500) {
+      const cutoff = Date.now() - CLIENT_DEDUP_TTL_MS;
+      for (const [id, ts] of recentlyProcessedClientIds) {
+        if (ts < cutoff) recentlyProcessedClientIds.delete(id);
+      }
+    }
+  }
+};
+
+const processPosterClientAdded = async (
+  clientId: number,
+  reply: FastifyReply,
+): Promise<{ handled: boolean; created?: boolean }> => {
   let client: PosterClient | null = null;
   try {
     client = await fetchPosterClient(clientId);
