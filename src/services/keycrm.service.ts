@@ -1002,7 +1002,7 @@ export const uploadBufferToKeycrmStorage = async (
  */
 export const sendUploadedImageToCustomerChat = async (
   orderId: number | string,
-  attachmentIndex: 0 | 1,
+  attachmentIndex: 0 | 1 | 2,
   files: Array<{ url: string; fileName?: string }>,
 ) => {
   try {
@@ -1097,10 +1097,13 @@ export const sendUploadedImageToCustomerChat = async (
     );
     const conversationId = latest.id;
 
+    const multiAngleText = files.length > 1 ? " з декількох ракурсів" : "";
     const text =
       attachmentIndex === 0
-        ? "Надсилаємо фото збірки без пакування на затвердження✨"
-        : "Надсилаємо фото у пакуванні на затвердження замовлення✨";
+        ? `Надсилаємо фото збірки без пакування${multiAngleText} на затвердження✨`
+        : attachmentIndex === 1
+          ? `Надсилаємо фото у пакуванні${multiAngleText} на затвердження замовлення✨`
+          : `Відправляємо фото${multiAngleText} на затвердження✨`;
 
     const automaticText =
       "\n\n**Це автоматичне повідомлення, надіслане системою";

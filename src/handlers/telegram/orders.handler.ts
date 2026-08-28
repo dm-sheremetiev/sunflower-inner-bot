@@ -24,7 +24,7 @@ const BTN_NEXT_PREFIX = "Стор. »";
 
 const awaitingOrderId = new Map<number, true>();
 
-type CompositionAttachmentIndex = 0 | 1;
+type CompositionAttachmentIndex = 0 | 1 | 2;
 
 type CompositionPhotoSession = {
   orderId: number;
@@ -50,8 +50,13 @@ const COMPOSITION_PACKED_STATUS_NAME =
 
 const COMP_PHOTO_ATTACH_PREFIX = "comp:attach:";
 const COMP_PHOTO_CONFIRM_PREFIX = "comp:confirm:";
-const COMP_PHOTO_SEND_NO_STATUS_PREFIX = "comp:send:";
 const COMP_PHOTO_CANCEL_PREFIX = "comp:cancel:";
+
+function isValidAttachmentIndex(
+  value: number,
+): value is CompositionAttachmentIndex {
+  return value === 0 || value === 1 || value === 2;
+}
 
 function getCompositionStatusName(
   attachmentIndex: CompositionAttachmentIndex,
@@ -64,6 +69,12 @@ function getCompositionStatusName(
 function buildCompositionAttachInlineKeyboard(orderId: number) {
   return {
     inline_keyboard: [
+      [
+        {
+          text: "Відправити фото без зміни статусу",
+          callback_data: `${COMP_PHOTO_ATTACH_PREFIX}2:${orderId}`,
+        },
+      ],
       [
         {
           text: "Прикріпити фото збірки",
@@ -88,13 +99,10 @@ function buildCompositionConfirmInlineKeyboard(
     inline_keyboard: [
       [
         {
-          text: "Відправити фото БЕЗ зміни статусу",
-          callback_data: `${COMP_PHOTO_SEND_NO_STATUS_PREFIX}${attachmentIndex}:${orderId}`,
-        },
-      ],
-      [
-        {
-          text: "Надіслати фото та змінити статус",
+          text:
+            attachmentIndex === 2
+              ? "Надіслати фото"
+              : "Надіслати фото та змінити статус",
           callback_data: `${COMP_PHOTO_CONFIRM_PREFIX}${attachmentIndex}:${orderId}`,
         },
       ],
@@ -113,6 +121,9 @@ function buildCompositionConfirmText(
   attachmentIndex: CompositionAttachmentIndex,
 ): string {
   const countText = photoCount === 1 ? "Фото отримано" : `Фото отримано (${photoCount} шт.)`;
+  if (attachmentIndex === 2) {
+    return `${countText}. Надіслати на затвердження БЕЗ зміни статусу.`;
+  }
   return `${countText}. Надіслати та змінити статус на «${getCompositionStatusName(attachmentIndex)}».`;
 }
 
@@ -585,7 +596,7 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
         const orderId = Number(orderIdRaw);
 
         if (
-          (attachmentIndex !== 0 && attachmentIndex !== 1) ||
+          !isValidAttachmentIndex(attachmentIndex) ||
           Number.isNaN(orderId) ||
           orderId <= 0
         ) {
@@ -616,7 +627,7 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
         const orderId = Number(orderIdRaw);
 
         if (
-          (attachmentIndex !== 0 && attachmentIndex !== 1) ||
+          !isValidAttachmentIndex(attachmentIndex) ||
           Number.isNaN(orderId) ||
           orderId <= 0
         ) {
@@ -642,16 +653,8 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
         return;
       }
 
-      const isConfirmWithStatus = data.startsWith(COMP_PHOTO_CONFIRM_PREFIX);
-      const isSendWithoutStatus = data.startsWith(
-        COMP_PHOTO_SEND_NO_STATUS_PREFIX,
-      );
-
-      if (isConfirmWithStatus || isSendWithoutStatus) {
-        const prefix = isConfirmWithStatus
-          ? COMP_PHOTO_CONFIRM_PREFIX
-          : COMP_PHOTO_SEND_NO_STATUS_PREFIX;
-        const rest = data.slice(prefix.length);
+      if (data.startsWith(COMP_PHOTO_CONFIRM_PREFIX)) {
+        const rest = data.slice(COMP_PHOTO_CONFIRM_PREFIX.length);
         const [attachmentIndexRaw, orderIdRaw] = rest.split(":");
         const attachmentIndex = Number(
           attachmentIndexRaw,
@@ -659,7 +662,7 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
         const orderId = Number(orderIdRaw);
 
         if (
-          (attachmentIndex !== 0 && attachmentIndex !== 1) ||
+          !isValidAttachmentIndex(attachmentIndex) ||
           Number.isNaN(orderId) ||
           orderId <= 0
         ) {
@@ -717,8 +720,9 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
             });
           }
 
-          // Change order status first (only for "send and change status")
-          if (isConfirmWithStatus) {
+          // Change order status first (mode 2 sends photos without status change)
+          const shouldChangeStatus = attachmentIndex !== 2;
+          if (shouldChangeStatus) {
             await changeOrderStatus(orderId, statusId);
           }
 
@@ -729,7 +733,7 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
 
           const photoCountText =
             files.length === 1 ? "Фото надіслано" : `Фото (${files.length} шт.) надіслано`;
-          const successText = isConfirmWithStatus
+          const successText = shouldChangeStatus
             ? `Готово! ${photoCountText} клієнту, статус замовлення змінено на «${getCompositionStatusName(attachmentIndex)}».`
             : `Готово! ${photoCountText} клієнту БЕЗ зміни статусу замовлення.`;
 
