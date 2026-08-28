@@ -71,7 +71,7 @@ function buildCompositionAttachInlineKeyboard(orderId: number) {
     inline_keyboard: [
       [
         {
-          text: "Відправити фото без зміни статусу",
+          text: "Відправити фото БЕЗ зміни статусу",
           callback_data: `${COMP_PHOTO_ATTACH_PREFIX}2:${orderId}`,
         },
       ],
