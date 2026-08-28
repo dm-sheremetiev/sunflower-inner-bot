@@ -997,8 +997,8 @@ export const uploadBufferToKeycrmStorage = async (
  * Sends composition/packing photos to the latest client conversation.
  * Unlike `sendImageToCustomerChat`, this function sends explicit file URLs
  * (so Telegram flow doesn't need to attach files to order first).
- * Tries to send all photos as a single message (photo group); if that fails —
- * falls back to sending them one by one.
+ * Photos are sent one per message: KeyCRM accepts multiple attachments,
+ * but channels (e.g. Instagram) deliver only the first one.
  */
 export const sendUploadedImageToCustomerChat = async (
   orderId: number | string,
@@ -1147,30 +1147,20 @@ export const sendUploadedImageToCustomerChat = async (
     // Wait before sending images
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
-    const sendAttachmentsMessage = (
-      attachments: typeof preparedAttachments,
-    ) =>
-      keycrmAdminApiClient.post(`/conversations/${conversationId}/messages`, {
-        message_body: null,
-        type: "outgoing",
-        is_email: false,
-        attachments,
-        conversation_id: conversationId,
-      });
-
-    try {
-      // Try to send all photos as a single message (photo group)
-      await sendAttachmentsMessage(preparedAttachments);
-    } catch (groupError) {
-      if (preparedAttachments.length === 1) throw groupError;
-      console.error(
-        `Failed to send photo group for order ${normalizedOrderId}, falling back to one-by-one:`,
-        groupError,
+    // KeyCRM accepts multiple attachments in one message, but channels
+    // (e.g. Instagram) deliver only the first one — so send one photo per message.
+    for (let i = 0; i < preparedAttachments.length; i++) {
+      if (i > 0) await new Promise((resolve) => setTimeout(resolve, 1000));
+      await keycrmAdminApiClient.post(
+        `/conversations/${conversationId}/messages`,
+        {
+          message_body: null,
+          type: "outgoing",
+          is_email: false,
+          attachments: [preparedAttachments[i]],
+          conversation_id: conversationId,
+        },
       );
-      for (let i = 0; i < preparedAttachments.length; i++) {
-        if (i > 0) await new Promise((resolve) => setTimeout(resolve, 1000));
-        await sendAttachmentsMessage([preparedAttachments[i]]);
-      }
     }
   } catch (err: unknown) {
     const errorMessage = err instanceof Error ? err.message : String(err);
