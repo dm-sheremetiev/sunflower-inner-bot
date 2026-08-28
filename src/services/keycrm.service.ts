@@ -994,21 +994,28 @@ export const uploadBufferToKeycrmStorage = async (
 };
 
 /**
- * Sends a composition/packing photo to the latest client conversation.
- * Unlike `sendImageToCustomerChat`, this function sends an explicit file URL
- * (so Telegram flow doesn't need to attach file to order first).
+ * Sends composition/packing photos to the latest client conversation.
+ * Unlike `sendImageToCustomerChat`, this function sends explicit file URLs
+ * (so Telegram flow doesn't need to attach files to order first).
+ * Tries to send all photos as a single message (photo group); if that fails —
+ * falls back to sending them one by one.
  */
 export const sendUploadedImageToCustomerChat = async (
   orderId: number | string,
   attachmentIndex: 0 | 1,
-  uploadedFileUrl: string,
-  uploadedFileName?: string,
+  files: Array<{ url: string; fileName?: string }>,
 ) => {
   try {
     // Ensure orderId is a number and convert to string for URL
     const normalizedOrderId = Number(orderId);
     if (isNaN(normalizedOrderId)) {
       throw new Error(`Невірний номер замовлення: ${orderId}`);
+    }
+
+    if (!files.length) {
+      throw new Error(
+        `Замовлення №${normalizedOrderId}. Не передано жодного фото для відправки.`,
+      );
     }
 
     // Get order info (including shipping, client, tags)
@@ -1098,10 +1105,24 @@ export const sendUploadedImageToCustomerChat = async (
     const automaticText =
       "\n\n**Це автоматичне повідомлення, надіслане системою";
     const finalText = text + automaticText;
-    const preparedAttachmentUrl = await prepareMetaCompatibleAttachmentUrl(
-      uploadedFileUrl,
-      uploadedFileName || "image.jpg",
-    );
+
+    const preparedAttachments: Array<{
+      url: string;
+      type: "image";
+      file_name: string;
+    }> = [];
+    for (const file of files) {
+      const fileName = file.fileName || "image.jpg";
+      const preparedUrl = await prepareMetaCompatibleAttachmentUrl(
+        file.url,
+        fileName,
+      );
+      preparedAttachments.push({
+        url: preparedUrl,
+        type: "image",
+        file_name: fileName,
+      });
+    }
 
     // Send text message first
     try {
@@ -1123,25 +1144,34 @@ export const sendUploadedImageToCustomerChat = async (
       );
     }
 
-    // Wait before sending image
+    // Wait before sending images
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
-    await keycrmAdminApiClient.post(
-      `/conversations/${conversationId}/messages`,
-      {
+    const sendAttachmentsMessage = (
+      attachments: typeof preparedAttachments,
+    ) =>
+      keycrmAdminApiClient.post(`/conversations/${conversationId}/messages`, {
         message_body: null,
         type: "outgoing",
         is_email: false,
-        attachments: [
-          {
-            url: preparedAttachmentUrl,
-            type: "image",
-            file_name: uploadedFileName || "image.jpg",
-          },
-        ],
+        attachments,
         conversation_id: conversationId,
-      },
-    );
+      });
+
+    try {
+      // Try to send all photos as a single message (photo group)
+      await sendAttachmentsMessage(preparedAttachments);
+    } catch (groupError) {
+      if (preparedAttachments.length === 1) throw groupError;
+      console.error(
+        `Failed to send photo group for order ${normalizedOrderId}, falling back to one-by-one:`,
+        groupError,
+      );
+      for (let i = 0; i < preparedAttachments.length; i++) {
+        if (i > 0) await new Promise((resolve) => setTimeout(resolve, 1000));
+        await sendAttachmentsMessage([preparedAttachments[i]]);
+      }
+    }
   } catch (err: unknown) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     const normalizedOrderId = Number(orderId) || orderId;

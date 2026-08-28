@@ -29,22 +29,37 @@ type CompositionAttachmentIndex = 0 | 1;
 type CompositionPhotoSession = {
   orderId: number;
   attachmentIndex: CompositionAttachmentIndex;
-  photoFileId?: string;
+  photoFileIds: string[];
+  confirmMessageId?: number;
   createdAt: number;
 };
 
 const awaitingCompositionPhoto = new Map<string, CompositionPhotoSession>();
 
 const COMPOSITION_PHOTO_SESSION_TTL_MS = 10 * 60 * 1000;
+const MAX_COMPOSITION_PHOTOS = 10;
 
 const COMPOSITION_BARE_STATUS_ID =
   process?.env?.COMPOSITION_BARE_STATUS_ID ?? "24";
 const COMPOSITION_PACKED_STATUS_ID =
   process?.env?.COMPOSITION_PACKED_STATUS_ID ?? "26";
+const COMPOSITION_BARE_STATUS_NAME =
+  process?.env?.COMPOSITION_BARE_STATUS_NAME ?? "Зібрано без пакування";
+const COMPOSITION_PACKED_STATUS_NAME =
+  process?.env?.COMPOSITION_PACKED_STATUS_NAME ?? "Запаковано";
 
 const COMP_PHOTO_ATTACH_PREFIX = "comp:attach:";
 const COMP_PHOTO_CONFIRM_PREFIX = "comp:confirm:";
+const COMP_PHOTO_SEND_NO_STATUS_PREFIX = "comp:send:";
 const COMP_PHOTO_CANCEL_PREFIX = "comp:cancel:";
+
+function getCompositionStatusName(
+  attachmentIndex: CompositionAttachmentIndex,
+): string {
+  return attachmentIndex === 0
+    ? COMPOSITION_BARE_STATUS_NAME
+    : COMPOSITION_PACKED_STATUS_NAME;
+}
 
 function buildCompositionAttachInlineKeyboard(orderId: number) {
   return {
@@ -73,7 +88,13 @@ function buildCompositionConfirmInlineKeyboard(
     inline_keyboard: [
       [
         {
-          text: "Надіслати це фото та змінити статус",
+          text: "Відправити фото БЕЗ зміни статусу",
+          callback_data: `${COMP_PHOTO_SEND_NO_STATUS_PREFIX}${attachmentIndex}:${orderId}`,
+        },
+      ],
+      [
+        {
+          text: "Надіслати фото та змінити статус",
           callback_data: `${COMP_PHOTO_CONFIRM_PREFIX}${attachmentIndex}:${orderId}`,
         },
       ],
@@ -85,6 +106,14 @@ function buildCompositionConfirmInlineKeyboard(
       ],
     ],
   };
+}
+
+function buildCompositionConfirmText(
+  photoCount: number,
+  attachmentIndex: CompositionAttachmentIndex,
+): string {
+  const countText = photoCount === 1 ? "Фото отримано" : `Фото отримано (${photoCount} шт.)`;
+  return `${countText}. Надіслати та змінити статус на «${getCompositionStatusName(attachmentIndex)}».`;
 }
 
 const STATUS_TRANSLATIONS: Record<string, string> = {
@@ -567,13 +596,13 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
         awaitingCompositionPhoto.set(chatId, {
           orderId,
           attachmentIndex,
-          photoFileId: undefined,
+          photoFileIds: [],
           createdAt: Date.now(),
         });
 
         await ctx.answerCallbackQuery();
         await ctx.reply(
-          "Надішліть фото одним повідомленням. Якщо фото буде кілька — візьмемо перше.",
+          `Надішліть фото (одне або кілька, максимум ${MAX_COMPOSITION_PHOTOS}). Можна надіслати альбомом.`,
         );
         return;
       }
@@ -613,8 +642,16 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
         return;
       }
 
-      if (data.startsWith(COMP_PHOTO_CONFIRM_PREFIX)) {
-        const rest = data.slice(COMP_PHOTO_CONFIRM_PREFIX.length);
+      const isConfirmWithStatus = data.startsWith(COMP_PHOTO_CONFIRM_PREFIX);
+      const isSendWithoutStatus = data.startsWith(
+        COMP_PHOTO_SEND_NO_STATUS_PREFIX,
+      );
+
+      if (isConfirmWithStatus || isSendWithoutStatus) {
+        const prefix = isConfirmWithStatus
+          ? COMP_PHOTO_CONFIRM_PREFIX
+          : COMP_PHOTO_SEND_NO_STATUS_PREFIX;
+        const rest = data.slice(prefix.length);
         const [attachmentIndexRaw, orderIdRaw] = rest.split(":");
         const attachmentIndex = Number(
           attachmentIndexRaw,
@@ -650,7 +687,7 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
           return;
         }
 
-        if (!session.photoFileId) {
+        if (!session.photoFileIds.length) {
           await ctx.answerCallbackQuery({
             text: "Спочатку надішліть фото.",
           });
@@ -667,39 +704,44 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
         const loadingMsg = await ctx.reply("Завантажується...");
 
         try {
-          // Download photo binary from Telegram
-          const tgFile = await ctx.api.getFile(session.photoFileId);
-          const filePath = tgFile?.file_path;
-          if (!filePath) throw new Error("Telegram file_path is empty.");
-
+          // Download photo binaries from Telegram
           const telegramToken = process?.env?.TELEGRAM_BOT_TOKEN || "";
-          const downloadUrl = `https://api.telegram.org/file/bot${telegramToken}/${filePath}`;
+          const files: Array<{ url: string; fileName?: string }> = [];
+          for (const photoFileId of session.photoFileIds) {
+            const tgFile = await ctx.api.getFile(photoFileId);
+            const filePath = tgFile?.file_path;
+            if (!filePath) throw new Error("Telegram file_path is empty.");
+            files.push({
+              url: `https://api.telegram.org/file/bot${telegramToken}/${filePath}`,
+              fileName: filePath.split("/").pop() || `photo-${orderId}.jpg`,
+            });
+          }
 
-          // Change order status first
-          await changeOrderStatus(orderId, statusId);
+          // Change order status first (only for "send and change status")
+          if (isConfirmWithStatus) {
+            await changeOrderStatus(orderId, statusId);
+          }
 
-          // Send uploaded image to client chat
-          const fileName = filePath.split("/").pop() || `photo-${orderId}.jpg`;
-          await sendUploadedImageToCustomerChat(
-            orderId,
-            attachmentIndex,
-            downloadUrl,
-            fileName,
-          );
+          // Send uploaded images to client chat
+          await sendUploadedImageToCustomerChat(orderId, attachmentIndex, files);
 
           awaitingCompositionPhoto.delete(chatId);
+
+          const photoCountText =
+            files.length === 1 ? "Фото надіслано" : `Фото (${files.length} шт.) надіслано`;
+          const successText = isConfirmWithStatus
+            ? `Готово! ${photoCountText} клієнту, статус замовлення змінено на «${getCompositionStatusName(attachmentIndex)}».`
+            : `Готово! ${photoCountText} клієнту БЕЗ зміни статусу замовлення.`;
 
           // Replace loading message with success message
           try {
             await ctx.api.editMessageText(
               chatId,
               loadingMsg.message_id,
-              "Готово! Фото надіслано клієнту, статус замовлення змінено.",
+              successText,
             );
           } catch {
-            await ctx.reply(
-              "Готово! Фото надіслано клієнту, статус замовлення змінено.",
-            );
+            await ctx.reply(successText);
           }
         } catch (e) {
           awaitingCompositionPhoto.delete(chatId);
@@ -951,22 +993,43 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
         return next();
       }
 
-      // If user already sent one photo — ignore any further photos.
-      if (session.photoFileId) return;
-
       const photoSizes = ctx.message?.photo;
       if (!photoSizes?.length) return next();
 
-      // "Беремо першу": this handler is invoked for each message, so first photo message wins.
-      const fileId = photoSizes[photoSizes.length - 1].file_id;
-      session.photoFileId = fileId;
+      // Ignore photos above the limit — the confirm message keeps showing the capped count.
+      if (session.photoFileIds.length >= MAX_COMPOSITION_PHOTOS) return;
 
-      await ctx.reply("Фото отримано. Підтвердьте дію:", {
-        reply_markup: buildCompositionConfirmInlineKeyboard(
-          session.attachmentIndex,
-          session.orderId,
-        ),
+      // Each photo (including album items) arrives as a separate message; collect them all.
+      const fileId = photoSizes[photoSizes.length - 1].file_id;
+      session.photoFileIds.push(fileId);
+
+      const confirmText = buildCompositionConfirmText(
+        session.photoFileIds.length,
+        session.attachmentIndex,
+      );
+      const confirmKeyboard = buildCompositionConfirmInlineKeyboard(
+        session.attachmentIndex,
+        session.orderId,
+      );
+
+      if (session.confirmMessageId) {
+        try {
+          await ctx.api.editMessageText(
+            String(chatId),
+            session.confirmMessageId,
+            confirmText,
+            { reply_markup: confirmKeyboard },
+          );
+          return;
+        } catch {
+          // Fall through — send a fresh confirm message below.
+        }
+      }
+
+      const confirmMsg = await ctx.reply(confirmText, {
+        reply_markup: confirmKeyboard,
       });
+      session.confirmMessageId = confirmMsg.message_id;
     } catch (err) {
       console.error("Composition photo handler error:", err);
       await ctx.reply("Сталася помилка з фото. Спробуйте ще раз.");
