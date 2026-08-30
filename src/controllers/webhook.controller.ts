@@ -15,6 +15,7 @@ import {
   validateOrderStatusChange,
   validateOrderAddressAndRevert,
   checkOrderPaymentsAndRevert,
+  checkBuyerPhoneAndNotify,
 } from "../services/keycrm.service.js";
 
 // Функция для валидации запроса и извлечения orderId
@@ -94,6 +95,9 @@ export const sendPackedMessage = async (
 ) => {
   return safetyWrapper(request, reply, async (orderId) => {
     await sendPackedMessageNotification(orderId, reply, true); // isGeneralMessage means that you will send messages to all managers
+    await checkBuyerPhoneAndNotify(orderId, reply).catch((error) => {
+      request.log.error({ error, orderId }, "Buyer phone check failed");
+    });
   });
 };
 
@@ -116,6 +120,10 @@ export const sendWaitingForDeliveryMessage = async (
       const orderId = body?.context?.id;
 
       const res = await sendMessageAboutWaiting(orderId, reply);
+
+      await checkBuyerPhoneAndNotify(orderId, reply).catch((error) => {
+        request.log.error({ error, orderId }, "Buyer phone check failed");
+      });
 
       return reply.status(200).send(res);
     }

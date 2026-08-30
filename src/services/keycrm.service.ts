@@ -1549,6 +1549,43 @@ export const validateOrderAddressAndRevert = async (
   }
 };
 
+export const checkBuyerPhoneAndNotify = async (
+  orderId: string | number,
+  reply?: FastifyReply,
+) => {
+  const log = reply?.log ?? console;
+  try {
+    const res = await keycrmApiClient.get<Order>(
+      `order/${+orderId}?include=buyer,manager`,
+    );
+    const order = res?.data;
+    if (!order) {
+      log.error({ error: `Order ${orderId} not found` });
+      return { notified: false, error: "Order not found" };
+    }
+
+    const hasBuyerPhone = !!order.buyer?.phone?.trim();
+    if (hasBuyerPhone) {
+      return { notified: false, message: "Buyer phone is set" };
+    }
+
+    const managerText = order.manager?.username
+      ? `@${order.manager.username}\n`
+      : "";
+    const orderLink = `\nhttps://sunflower.keycrm.app/app/orders/view/${orderId}`;
+    const message = `${managerText}Замовлення №${orderId}: забули взяти номер телефону клієнта та додати його до його картки у СРМ.${orderLink}`;
+
+    if (managersChatId) {
+      await sendTelegramMessage(managersChatId, message);
+    }
+
+    return { notified: true, message };
+  } catch (error) {
+    log.error({ error });
+    throw error;
+  }
+};
+
 /**
  * Пагіновано отримує замовлення з KeyCRM для дат 13-15 лютого 2026.
  * Фільтрує тільки ті, що не виконані та не скасовані.
