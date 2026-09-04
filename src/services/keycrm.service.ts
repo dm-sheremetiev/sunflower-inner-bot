@@ -1549,6 +1549,27 @@ export const validateOrderAddressAndRevert = async (
   }
 };
 
+const NO_PHONE_FIELD_UUID = "OR_1031";
+const NO_PHONE_FIELD_NAME = "Без номера телефону";
+
+/**
+ * Чи увімкнений перемикач «Без номера телефону» (OR_1031) у замовленні.
+ * value може бути масивом ["true"] або рядком.
+ */
+const hasNoPhoneCustomField = (order: Order): boolean => {
+  const field = order.custom_fields?.find((f) => {
+    if (!f) return false;
+    const name = String(f.name ?? "").toLowerCase();
+    return (
+      f.uuid === NO_PHONE_FIELD_UUID ||
+      name.includes(NO_PHONE_FIELD_NAME.toLowerCase())
+    );
+  });
+  const raw = field?.value;
+  const value = Array.isArray(raw) ? String(raw[0] ?? "") : String(raw ?? "");
+  return value.trim().toLowerCase() === "true";
+};
+
 export const checkBuyerPhoneAndNotify = async (
   orderId: string | number,
   reply?: FastifyReply,
@@ -1556,7 +1577,7 @@ export const checkBuyerPhoneAndNotify = async (
   const log = reply?.log ?? console;
   try {
     const res = await keycrmApiClient.get<Order>(
-      `order/${+orderId}?include=buyer,manager`,
+      `order/${+orderId}?include=buyer,manager,custom_fields`,
     );
     const order = res?.data;
     if (!order) {
@@ -1569,11 +1590,15 @@ export const checkBuyerPhoneAndNotify = async (
       return { notified: false, message: "Buyer phone is set" };
     }
 
+    if (hasNoPhoneCustomField(order)) {
+      return { notified: false, message: "No phone custom field is set" };
+    }
+
     const managerText = order.manager?.username
       ? `@${order.manager.username}\n`
       : "";
     const orderLink = `\nhttps://sunflower.keycrm.app/app/orders/view/${orderId}`;
-    const message = `${managerText}Замовлення №${orderId}: забули взяти номер телефону клієнта та додати його до його картки у СРМ.${orderLink}`;
+    const message = `${managerText}Замовлення №${orderId}: забули взяти номер телефону клієнта та додати його до його картки у СРМ.\nЯкщо номера немає або клієнт відмовився — увімкніть перемикач «${NO_PHONE_FIELD_NAME}» у замовленні.${orderLink}`;
 
     if (managersChatId) {
       await sendTelegramMessage(managersChatId, message);
