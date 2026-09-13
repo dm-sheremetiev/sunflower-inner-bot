@@ -706,6 +706,14 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
 
         const loadingMsg = await ctx.reply("Завантажується...");
 
+        const showResult = async (text: string) => {
+          try {
+            await ctx.api.editMessageText(chatId, loadingMsg.message_id, text);
+          } catch {
+            await ctx.reply(text);
+          }
+        };
+
         try {
           // Download photo binaries from Telegram
           const telegramToken = process?.env?.TELEGRAM_BOT_TOKEN || "";
@@ -720,44 +728,65 @@ export function registerOrderHandlers(bot: Bot<Context, Api<RawApi>>): void {
             });
           }
 
-          // Change order status first (mode 2 sends photos without status change)
-          const shouldChangeStatus = attachmentIndex !== 2;
-          if (shouldChangeStatus) {
-            await changeOrderStatus(orderId, statusId);
+          // Send photos first: status must not change if the client got nothing
+          const sendResult = await sendUploadedImageToCustomerChat(
+            orderId,
+            attachmentIndex,
+            files,
+          );
+
+          if (sendResult.status === "failed") {
+            awaitingCompositionPhoto.delete(chatId);
+            await showResult(
+              `❌ Фото НЕ надіслано клієнту. Статус замовлення №${orderId} не змінено.\nПричина: ${sendResult.reason}\nСпробуйте ще раз або надішліть фото вручну.`,
+            );
+            return;
           }
 
-          // Send uploaded images to client chat
-          await sendUploadedImageToCustomerChat(orderId, attachmentIndex, files);
+          // Mode 2 sends photos without status change
+          const shouldChangeStatus = attachmentIndex !== 2;
+          if (shouldChangeStatus) {
+            try {
+              await changeOrderStatus(orderId, statusId);
+            } catch (statusError) {
+              awaitingCompositionPhoto.delete(chatId);
+              console.error(
+                `Failed to change status for order ${orderId}:`,
+                statusError,
+              );
+              await showResult(
+                `⚠️ Фото оброблено, але статус замовлення №${orderId} НЕ змінено на «${getCompositionStatusName(attachmentIndex)}». Змініть статус вручну у CRM.`,
+              );
+              return;
+            }
+          }
 
           awaitingCompositionPhoto.delete(chatId);
+
+          if (sendResult.status === "skipped") {
+            await showResult(
+              shouldChangeStatus
+                ? `⚠️ Фото НЕ надіслано клієнту: ${sendResult.reason}.\nСтатус замовлення змінено на «${getCompositionStatusName(attachmentIndex)}». Надішліть фото вручну, якщо потрібно.`
+                : `⚠️ Фото НЕ надіслано клієнту: ${sendResult.reason}.\nСтатус замовлення не змінювався. Надішліть фото вручну, якщо потрібно.`,
+            );
+            return;
+          }
 
           const photoCountText =
             files.length === 1 ? "Фото надіслано" : `Фото (${files.length} шт.) надіслано`;
+          const warning = sendResult.textFailed
+            ? "\n⚠️ Супровідний текст не надіслався — перевірте чат клієнта."
+            : "";
           const successText = shouldChangeStatus
-            ? `Готово! ${photoCountText} клієнту, статус замовлення змінено на «${getCompositionStatusName(attachmentIndex)}».`
-            : `Готово! ${photoCountText} клієнту БЕЗ зміни статусу замовлення.`;
+            ? `Готово! ${photoCountText} клієнту, статус замовлення змінено на «${getCompositionStatusName(attachmentIndex)}».${warning}`
+            : `Готово! ${photoCountText} клієнту БЕЗ зміни статусу замовлення.${warning}`;
 
-          // Replace loading message with success message
-          try {
-            await ctx.api.editMessageText(
-              chatId,
-              loadingMsg.message_id,
-              successText,
-            );
-          } catch {
-            await ctx.reply(successText);
-          }
+          await showResult(successText);
         } catch (e) {
           awaitingCompositionPhoto.delete(chatId);
-          try {
-            await ctx.api.editMessageText(
-              chatId,
-              loadingMsg.message_id,
-              "Сталася помилка. Спробуйте ще раз.",
-            );
-          } catch {
-            await ctx.reply("Сталася помилка. Спробуйте ще раз.");
-          }
+          await showResult(
+            `❌ Сталася помилка, фото НЕ надіслано клієнту. Статус замовлення №${orderId} не змінено. Спробуйте ще раз.`,
+          );
           throw e;
         }
 
