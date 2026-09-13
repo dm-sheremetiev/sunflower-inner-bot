@@ -125,12 +125,22 @@ export const sendWaitingForDeliveryMessage = async (
         request.log.error({ error, orderId }, "Buyer phone check failed");
       });
 
+      // sendMessageAboutWaiting відповідає сама — другий send кинув би
+      // FST_ERR_REP_ALREADY_SENT вже після успішної відповіді клієнту.
+      if (reply.sent) {
+        return reply;
+      }
+
       return reply.status(200).send(res);
     }
 
     return reply.status(200).send();
   } catch (error) {
     request.log.error({ error });
+
+    if (reply.sent) {
+      return reply;
+    }
 
     return reply.status(501).send({ message: "Internal Server Error", error });
   }
