@@ -1241,7 +1241,7 @@ const describeRequestError = (error: unknown): string => {
 };
 
 /** Затримка перед повтором: для 429 поважаємо `retry-after`, інакше 2с, 4с. */
-const getUploadRetryDelayMs = (error: unknown, attempt: number): number => {
+const getRetryDelayMs = (error: unknown, attempt: number): number => {
   const MAX_DELAY_MS = 15_000;
   if (axios.isAxiosError(error) && error.response?.status === 429) {
     const headers = error.response.headers ?? {};
@@ -1254,6 +1254,34 @@ const getUploadRetryDelayMs = (error: unknown, attempt: number): number => {
     return MAX_DELAY_MS;
   }
   return Math.min(2_000 * 2 ** (attempt - 1), MAX_DELAY_MS);
+};
+
+const RATE_LIMIT_MAX_ATTEMPTS = 4;
+
+/**
+ * Повторює запит до KeyCRM, якщо той впреться у ліміт запитів (429).
+ * Решту помилок прокидає одразу — їх повтор не виправить.
+ */
+const withRateLimitRetry = async <T>(
+  request: () => Promise<T>,
+  context: string,
+): Promise<T> => {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await request();
+    } catch (error) {
+      const isRateLimited =
+        axios.isAxiosError(error) && error.response?.status === 429;
+      if (!isRateLimited || attempt === RATE_LIMIT_MAX_ATTEMPTS) {
+        throw error;
+      }
+      const delayMs = getRetryDelayMs(error, attempt);
+      console.warn(
+        `KeyCRM rate limit (429) on ${context}, attempt ${attempt}/${RATE_LIMIT_MAX_ATTEMPTS}, waiting ${delayMs}ms`,
+      );
+      await sleep(delayMs);
+    }
+  }
 };
 
 /** 4xx (окрім 429) від повтору не зникне — таке не ретраїмо. */
@@ -1289,7 +1317,7 @@ async function downloadAndUploadFile(
       if (attempt === UPLOAD_MAX_ATTEMPTS || !isRetryableUploadError(error)) {
         break;
       }
-      await sleep(getUploadRetryDelayMs(error, attempt));
+      await sleep(getRetryDelayMs(error, attempt));
     }
   }
 
@@ -1734,14 +1762,18 @@ export const fetchOrdersForReserve = async (): Promise<Order[]> => {
     "assigned,custom_fields,shipping.deliveryService,buyer,manager,products,tags,status";
 
   while (hasMore) {
-    const response = await keycrmApiClient.get<{ data: Order[] }>("/order", {
-      params: {
-        limit,
-        page,
-        "filter[shipping_between]": shippingBetween,
-        include,
-      },
-    });
+    const response = await withRateLimitRetry(
+      () =>
+        keycrmApiClient.get<{ data: Order[] }>("/order", {
+          params: {
+            limit,
+            page,
+            "filter[shipping_between]": shippingBetween,
+            include,
+          },
+        }),
+      `reserve sync page ${page}`,
+    );
 
     const orders = response.data?.data ?? [];
     allOrders.push(...orders);
