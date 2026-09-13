@@ -994,6 +994,17 @@ export const uploadBufferToKeycrmStorage = async (
 };
 
 /**
+ * Результат відправки фото клієнту.
+ * `skipped` — свідомо не відправляли (тег блогера/скарги, дата не сьогодні/завтра,
+ * немає чату): роботу флориста це не скасовує, статус можна міняти.
+ * `failed` — технічний збій, який має сенс повторити: статус міняти НЕ можна.
+ */
+export type SendPhotoToClientResult =
+  | { status: "sent"; textFailed: boolean }
+  | { status: "skipped"; reason: string }
+  | { status: "failed"; reason: string };
+
+/**
  * Sends composition/packing photos to the latest client conversation.
  * Unlike `sendImageToCustomerChat`, this function sends explicit file URLs
  * (so Telegram flow doesn't need to attach files to order first).
@@ -1004,7 +1015,8 @@ export const sendUploadedImageToCustomerChat = async (
   orderId: number | string,
   attachmentIndex: 0 | 1 | 2,
   files: Array<{ url: string; fileName?: string }>,
-) => {
+): Promise<SendPhotoToClientResult> => {
+  let branchPrefix = "";
   try {
     // Ensure orderId is a number and convert to string for URL
     const normalizedOrderId = Number(orderId);
@@ -1032,9 +1044,10 @@ export const sendUploadedImageToCustomerChat = async (
         (tag?.name ?? "").toLowerCase().includes("блогер"),
       )
     ) {
-      throw new Error(
-        `Замовлення №${normalizedOrderId} для блогера, фото не відправляємо.`,
-      );
+      return {
+        status: "skipped",
+        reason: `замовлення №${normalizedOrderId} для блогера, фото не відправляємо`,
+      };
     }
 
     if (
@@ -1042,21 +1055,21 @@ export const sendUploadedImageToCustomerChat = async (
         (tag?.name ?? "").toLowerCase().includes("скарга"),
       )
     ) {
-      throw new Error(
-        `Замовлення №${normalizedOrderId} має тег "скарга", фото не відправляємо.`,
-      );
+      return {
+        status: "skipped",
+        reason: `замовлення №${normalizedOrderId} має тег "скарга", фото не відправляємо`,
+      };
     }
 
     const branchNames = extractBranchNames(order);
+    branchPrefix = branchNames?.length ? `${branchNames}. ` : "";
 
     // Keep the same "today/tomorrow" rule as existing `sendImageToCustomerChat`
     const shippingDateStr = order.shipping?.shipping_date_actual;
     if (!shippingDateStr) {
-      const msg =
-        `${branchNames?.length ? `${branchNames}. ` : ""}` +
-        `Замовлення №${normalizedOrderId}. Фото не було відправлено: не вказано дату відправки. Надішліть фото вручну.`;
+      const msg = `${branchPrefix}Замовлення №${normalizedOrderId}. Фото не було відправлено: не вказано дату відправки. Надішліть фото вручну.`;
       await sendTelegramMessage(photoApprovalChatId, msg).catch(() => null);
-      return;
+      return { status: "skipped", reason: "не вказано дату відправки" };
     }
 
     const todayKyiv = dayjs().tz(KYIV_TZ).startOf("day");
@@ -1067,18 +1080,19 @@ export const sendUploadedImageToCustomerChat = async (
 
     if (!isDeliveryTodayOrTomorrow) {
       const deliveryFormatted = deliveryDayKyiv.format("DD.MM.YYYY");
-      const msg =
-        `${branchNames?.length ? `${branchNames}. ` : ""}` +
-        `Замовлення №${normalizedOrderId}. Фото не було відправлено: дата відправки ${deliveryFormatted} — це не сьогодні і не завтра (за київським часом). Надішліть фото вручну.`;
+      const msg = `${branchPrefix}Замовлення №${normalizedOrderId}. Фото не було відправлено: дата відправки ${deliveryFormatted} — це не сьогодні і не завтра (за київським часом). Надішліть фото вручну.`;
       await sendTelegramMessage(photoApprovalChatId, msg).catch(() => null);
-      return;
+      return {
+        status: "skipped",
+        reason: `дата відправки ${deliveryFormatted} — не сьогодні і не завтра`,
+      };
     }
 
     const clientId = order.client_id;
     if (!clientId) {
-      throw new Error(
-        `Замовлення №${normalizedOrderId}. Не знайдено client_id для відправки фото.`,
-      );
+      const msg = `${branchPrefix}Замовлення №${normalizedOrderId}. Фото не було відправлено: не знайдено client_id. Надішліть фото вручну.`;
+      await sendTelegramMessage(photoApprovalChatId, msg).catch(() => null);
+      return { status: "skipped", reason: "не знайдено client_id у замовленні" };
     }
 
     const conversationsRes = await keycrmAdminApiClient.get<Conversation[]>(
@@ -1087,9 +1101,9 @@ export const sendUploadedImageToCustomerChat = async (
     const conversations = conversationsRes.data;
 
     if (!conversations.length) {
-      throw new Error(
-        `${branchNames?.length ? `${branchNames}. ` : ""}Замовлення №${normalizedOrderId}. Не було знайдено чату для клієнта.`,
-      );
+      const msg = `${branchPrefix}Замовлення №${normalizedOrderId}. Фото не було відправлено: не знайдено чату з клієнтом. Надішліть фото вручну.`;
+      await sendTelegramMessage(photoApprovalChatId, msg).catch(() => null);
+      return { status: "skipped", reason: "не знайдено чату з клієнтом" };
     }
 
     const latest = conversations.reduce((a, b) =>
@@ -1128,6 +1142,7 @@ export const sendUploadedImageToCustomerChat = async (
     }
 
     // Send text message first
+    let textFailed = false;
     try {
       await keycrmAdminApiClient.post(
         `/conversations/${conversationId}/messages`,
@@ -1141,10 +1156,15 @@ export const sendUploadedImageToCustomerChat = async (
       );
     } catch (e) {
       // Continue with image sending even if text fails
+      textFailed = true;
       console.error(
-        `Failed to send text message for order ${normalizedOrderId}:`,
+        `Failed to send text message for order ${normalizedOrderId}: ${describeRequestError(e)}`,
         e,
       );
+      await sendTelegramMessage(
+        photoApprovalChatId,
+        `${branchPrefix}Замовлення №${normalizedOrderId}. Супровідний текст до фото НЕ надіслався: ${describeRequestError(e)}. Перевірте чат клієнта.`,
+      ).catch(() => null);
     }
 
     // Wait before sending images
@@ -1165,32 +1185,125 @@ export const sendUploadedImageToCustomerChat = async (
         },
       );
     }
+
+    return { status: "sent", textFailed };
   } catch (err: unknown) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
+    const reason = describeRequestError(err);
     const normalizedOrderId = Number(orderId) || orderId;
-    const generalErrorMessage = errorMessage
-      ? `${errorMessage}. OrderId: ${normalizedOrderId}`
-      : `Невдала відправка фото при зміні статусу у замовлення №${normalizedOrderId}. Відправте вручну.`;
+    const errorMessage = `${branchPrefix}Замовлення №${normalizedOrderId}. ФОТО НЕ НАДІСЛАНО КЛІЄНТУ. Причина: ${reason}. Статус не змінено — спробуйте ще раз або надішліть фото вручну.`;
+
+    console.error(`Photo send failed for order ${normalizedOrderId}:`, err);
 
     try {
-      await sendTelegramMessage(photoApprovalChatId, generalErrorMessage);
+      await sendTelegramMessage(photoApprovalChatId, errorMessage);
     } catch (telegramError) {
       console.error(
         `Failed to send error message to Telegram for order ${normalizedOrderId}:`,
         telegramError,
       );
     }
+
+    return { status: "failed", reason };
   }
 };
 
+const UPLOAD_MAX_ATTEMPTS = 3;
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
- * Downloads a file from URL and uploads it to KeyCRM storage
+ * Людиночитабельний опис помилки запиту: статус, код та тіло відповіді.
+ * `error.message` буває порожнім, тому покладатися лише на нього не можна —
+ * саме через це в чат раніше прилітало "Failed to download and upload file: ".
+ */
+const describeRequestError = (error: unknown): string => {
+  if (axios.isAxiosError(error)) {
+    const body = error.response?.data;
+    const bodyText =
+      typeof body === "string"
+        ? body.slice(0, 300)
+        : body
+          ? JSON.stringify(body).slice(0, 300)
+          : "";
+    const parts = [
+      error.response?.status ? `HTTP ${error.response.status}` : "",
+      error.code ?? "",
+      error.message,
+      bodyText,
+    ].filter(Boolean);
+    return parts.join(" | ") || "невідома помилка запиту";
+  }
+  if (error instanceof Error) {
+    return error.message || error.name || "невідома помилка";
+  }
+  return String(error) || "невідома помилка";
+};
+
+/** Затримка перед повтором: для 429 поважаємо `retry-after`, інакше 2с, 4с. */
+const getUploadRetryDelayMs = (error: unknown, attempt: number): number => {
+  const MAX_DELAY_MS = 15_000;
+  if (axios.isAxiosError(error) && error.response?.status === 429) {
+    const headers = error.response.headers ?? {};
+    const retryAfterSec = Number(
+      headers["retry-after"] ?? headers["Retry-After"],
+    );
+    if (Number.isFinite(retryAfterSec) && retryAfterSec > 0) {
+      return Math.min((retryAfterSec + 2) * 1000, MAX_DELAY_MS);
+    }
+    return MAX_DELAY_MS;
+  }
+  return Math.min(2_000 * 2 ** (attempt - 1), MAX_DELAY_MS);
+};
+
+/** 4xx (окрім 429) від повтору не зникне — таке не ретраїмо. */
+const isRetryableUploadError = (error: unknown): boolean => {
+  if (axios.isAxiosError(error)) {
+    const status = error.response?.status;
+    if (status != null && status !== 429 && status >= 400 && status < 500) {
+      return false;
+    }
+  }
+  return true;
+};
+
+/**
+ * Downloads a file from URL and uploads it to KeyCRM storage.
+ * Робить до `UPLOAD_MAX_ATTEMPTS` спроб: мережеві збої та 5xx/429 повторюємо.
  */
 async function downloadAndUploadFile(
   fileUrl: string,
   fileName: string,
 ): Promise<string> {
-  try {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= UPLOAD_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await downloadAndUploadFileOnce(fileUrl, fileName);
+    } catch (error: unknown) {
+      lastError = error;
+      console.error(
+        `Download/upload attempt ${attempt}/${UPLOAD_MAX_ATTEMPTS} failed for "${fileName}": ${describeRequestError(error)}`,
+        error,
+      );
+      if (attempt === UPLOAD_MAX_ATTEMPTS || !isRetryableUploadError(error)) {
+        break;
+      }
+      await sleep(getUploadRetryDelayMs(error, attempt));
+    }
+  }
+
+  throw new Error(
+    `не вдалося завантажити фото у сховище CRM після ${UPLOAD_MAX_ATTEMPTS} спроб: ${describeRequestError(lastError)}`,
+  );
+}
+
+/** Одна спроба: завантажити файл за URL і покласти його у сховище KeyCRM. */
+async function downloadAndUploadFileOnce(
+  fileUrl: string,
+  fileName: string,
+): Promise<string> {
+  {
     // Download file from URL
     const response = await axios.get(fileUrl, {
       responseType: "arraybuffer",
@@ -1236,11 +1349,6 @@ async function downloadAndUploadFile(
     }
 
     return uploadResponse.data.url;
-  } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    const fullErrorMessage = `Failed to download and upload file: ${errorMessage}`;
-    console.error(fullErrorMessage, error);
-    throw new Error(fullErrorMessage);
   }
 }
 
